@@ -21,7 +21,7 @@ class HandDetector:
         self.num_hands = num_hands
         self.results = None
 
-        # ====== 2) 建立 HandLandmarker（IMAGE 模式）======
+        # ====== 2) 建立 HandLandmarker（VIDEO 模式）======
         self.BaseOptions = mp.tasks.BaseOptions
         self.VisionRunningMode = mp.tasks.vision.RunningMode
         self.HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
@@ -32,14 +32,13 @@ class HandDetector:
 
         options = self.HandLandmarkerOptions(
             base_options=self.BaseOptions(model_asset_path=MODEL_PATH),
-            running_mode=self.VisionRunningMode.VIDEO,  # 改成 VIDEO 模式
-            num_hands=num_hands,  # 图中只有一只手
+            running_mode=self.VisionRunningMode.VIDEO,
+            num_hands=num_hands,
             min_hand_detection_confidence=detectionCon,
             min_hand_presence_confidence=presenceCon,
             min_tracking_confidence=trackingCon,
         )
-        self.detector=self.HandLandmarker.create_from_options(options)
-        # 修复：将 detector 赋值给 landmarker 属性，保持后续调用一致
+        self.detector = self.HandLandmarker.create_from_options(options)
         self.landmarker = self.detector
 
     def findHands(self, img, draw=True, flip=True):
@@ -60,7 +59,6 @@ class HandDetector:
         self.results = self.landmarker.detect_for_video(mp_img, timestamp_ms)
 
         # 5) 绘制手部关键点 + 关键点
-        # 修复：判断条件改为检查 hand_landmarks 是否存在
         if draw and self.results and self.results.hand_landmarks:
             for hand_landmarks in self.results.hand_landmarks:
                 h, w, _ = img.shape
@@ -85,7 +83,7 @@ class HandDetector:
         return img
 
     def findPosition(self, img, handNo=0, draw=False):
-        # 回传指定手的 21 个关键点座标:[[id, cx, cy], ...]
+        """回传指定手的 21 个关键点座标: [[id, cx, cy], ...]"""
         lmList = []
 
         if self.results and self.results.hand_landmarks:
@@ -101,6 +99,27 @@ class HandDetector:
                         cv2.circle(img, (cx, cy), 10, (255, 0, 255), cv2.FILLED)
         return lmList
 
+    def findPositionDict(self, img, handNo=0, draw=False):
+        """
+        回传指定手的 21 个关键点座标字典：{id: (cx, cy), ...}
+        方便按编号快速取点
+        """
+        ImDict = {}
+
+        if self.results and self.results.hand_landmarks:
+            if handNo < len(self.results.hand_landmarks):
+                h, w, c = img.shape
+                myHand = self.results.hand_landmarks[handNo]
+
+                for idx, lm in enumerate(myHand):
+                    cx, cy = int(lm.x * w), int(lm.y * h)
+                    ImDict[idx] = (cx, cy)
+
+                    if draw:
+                        cv2.circle(img, (cx, cy), 10, (255, 0, 255), cv2.FILLED)
+
+        return ImDict
+
     def close(self):
         """关闭 HandLandmarker 资源"""
         if self.landmarker:
@@ -108,7 +127,6 @@ class HandDetector:
 
 
 if __name__ == '__main__':
-    # 修复1：参数顺序错误，应该是 MODEL_PATH 在前，MODEL_URL 在后
     ensure_model(MODEL_PATH, MODEL_URL)
     cap = cv2.VideoCapture(0)
     detector = HandDetector()
@@ -117,9 +135,8 @@ if __name__ == '__main__':
         if not success or frame is None:
             continue
 
-        frame=detector.findHands(frame, draw=True)
+        frame = detector.findHands(frame, draw=True)
 
-        # 修复2：取消注释，显示窗口
         cv2.imshow('HandImage', frame)
 
         key = cv2.waitKey(1) & 0xFF
