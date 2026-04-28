@@ -6,7 +6,7 @@ import mediapipe as mp
 
 # ====== 路径设置 ======
 # 使用绝对路径，确保无论从哪里执行脚本都能找到图片
-IMAGE_PATH = os.path.join(os.path.dirname(__file__), "images", "Hands-4-1.jpg")
+IMAGE_PATH = os.path.join(os.path.dirname(__file__), "images","HandLandMarks", "Hands-4-1.jpg")
 
 # ====== 1) 下載/指定 HandLandmarker 模型 ======
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
