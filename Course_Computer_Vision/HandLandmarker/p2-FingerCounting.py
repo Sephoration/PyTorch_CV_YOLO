@@ -5,7 +5,7 @@ import os
 
 # ========== 1. 图片加载 ==========
 # 使用绝对路径，确保无论从哪里执行脚本都能找到图片目录
-folderPath = os.path.join(os.path.dirname(__file__), "FingerImages")
+folderPath = os.path.join(os.path.dirname(__file__), "images","fingerCounting")
 myList = os.listdir(folderPath)
 overlayList = []
 
