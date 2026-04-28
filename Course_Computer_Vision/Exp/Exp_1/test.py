@@ -124,8 +124,13 @@ while True:
                 
                 # ========== 10. 音量控制顺序解锁逻辑 ==========
                 if volume_available:
-                    # 检查当前锁定的数字是否是顺序中的下一个
-                    next_required = required_sequence[len(volume_unlock_sequence)]
+                    
+                    if len(volume_unlock_sequence) < len(required_sequence):
+                        next_required = required_sequence[len(volume_unlock_sequence)]
+                        print(f"[INFO] 下一个需要的音量: {next_required}")
+                    else:
+                        print("[INFO] 所有音量序列已正确解锁！")
+
                     if locked_number == next_required:
                         volume_unlock_sequence.append(locked_number)
                         print(f"[INFO] 音量解锁进度: {volume_unlock_sequence}")
