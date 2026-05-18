@@ -1,159 +1,187 @@
 # p1_SuspectedLaneChange.py
-
 """
-T-4: 疑似变道行为检测
-功能：追踪 + 轨迹 + 方向向量 + 角度 + 变道判断 + CSV导出
+期中报告 — 疑似变道行为检测
+场景：高架桥俯拍，车辆从远到近，双车道
+方法：角度变化检测 + 横向位移确认
 """
 
 import cv2
 import os
-from yolo_tracker_base import YOLOTracker, VIDEOS_DIR, OUTPUT_DIR, PROJECT_ROOT
+from yolo_tracker_base import YOLOTracker, VIDEOS_DIR, OUTPUT_DIR
 
-# ========== 配置 ==========
-VIDEO_NAME = "2.mp4"                      # 视频文件名
-SAVE_VIDEO = True                          # 是否保存结果视频
-OUTPUT_NAME = "p1_SuspectedLaneChange.mp4" # 输出视频文件名
-CSV_NAME = "analysis_records.csv"          # CSV输出文件名
+# ============================================================
+# 视频配置
+# ============================================================
+VIDEO_NAME = "exp_1.mp4"
+SAVE_VIDEO = True
+OUTPUT_NAME = "p1_LC_result.mp4"
+CSV_NAME = "LC_records.csv"
 
-# ========== 俯视 / 虚线变道专用参数 ==========
+# ============================================================
+# 轨迹参数
+# ============================================================
+TRAIL_LENGTH = 80       # 轨迹最大缓冲长度
+ANGLE_STEP = 3          # 方向向量间隔帧数（跳帧抑制噪声）
+SMOOTH_ALPHA = 0.35     # 指数平滑系数
 
-MIN_TRAIL_POINTS = 15        # 俯视下轨迹短一点也能判断
-ANGLE_STEP = 3               # 减小间隔，及时捕捉方向变化
-
-# 监控区间（全画面）
-VALID_Y_MIN = 0
-VALID_Y_MAX = 9999
-
-# 短窗口（快速 / 虚线变道）
+# ============================================================
+# 角度变化检测（三窗口：短/中/长，覆盖快中慢变道）
+# ============================================================
 SHORT_WINDOW_SIZE = 8
-SHORT_ACC_THRESHOLD = 14      # 提高，减少直行车微小摆动误报
-SHORT_CONSISTENT_RATIO = 0.55
+SHORT_ACC_THRESHOLD = 25        # 短窗口累积角度阈值
+SHORT_CONSISTENT_RATIO = 0.55   # 短窗口方向一致性
 
-# 长窗口
 LONG_WINDOW_SIZE = 20
-LONG_ACC_THRESHOLD = 25       # 提高，减少缓慢累积的误报
-LONG_CONSISTENT_RATIO = 0.50
+LONG_ACC_THRESHOLD = 35         # 中窗口累积角度阈值
+LONG_CONSISTENT_RATIO = 0.50    # 中窗口方向一致性
 
-# 横向位移确认（俯视下调整）
-TRAJECTORY_WINDOW_SIZE = 15
-MIN_LATERAL_SHIFT = 8         # 降低，因为俯视画面有限
-MIN_LATERAL_RATIO = 0.08      # 放宽
-MIN_X_CONSISTENT_RATIO = 0.50
+LONG2_WINDOW_SIZE = 60          # 大窗口（慢速变道）
+LONG2_ACC_THRESHOLD = 20        # 大窗口累积角度阈值（低门槛靠帧数积累）
+LONG2_ACC_THRESHOLD = 20        # 大窗口累积角度阈值（低门槛靠帧数积累）
+LONG2_CONSISTENT_RATIO = 0.40   # 大窗口方向一致性
 
-# 净角度变化
-SHORT_NET_THRESHOLD = 10
-LONG_NET_THRESHOLD = 15
+SHORT_NET_THRESHOLD = 15        # 短窗口净角度门槛
+LONG_NET_THRESHOLD = 25         # 中窗口净角度门槛
+LONG2_NET_THRESHOLD = 20        # 大窗口净角度门槛
 
-# 异常角度过滤（最关键）
-ABNORMAL_ANGLE_DIFF = 15.0    # 放宽，避免切除变道信号
+# ============================================================
+# 透视补偿（远处自动放宽阈值）
+# ============================================================
+PERSPECTIVE_ENABLED = True
+VALID_Y_MIN = 120
+VALID_Y_MAX = 600
 
-# 速度过滤：静止/慢速车辆跳过变道分析
-MIN_SPEED = 2.5               # 像素/帧，低于此值视为静止
+# ============================================================
+# 横向位移确认
+# ============================================================
+TRAJECTORY_WINDOW_SIZE = 30
+MIN_LATERAL_SHIFT = 40          # 最少横向位移量（像素）
+MIN_LATERAL_RATIO = 0.15        # 横向/纵向比例
+MIN_X_CONSISTENT_RATIO = 0.50   # 横向方向一致性
+# ============================================================
+# 过滤参数
+# ============================================================
+ABNORMAL_ANGLE_DIFF = 20.0      # 单帧角度跳变阈值
+MIN_SPEED = 2.0                 # 最低速度（像素/帧）
 
-# 横向位移轴：水平道路（左到右）用 'y'，垂直道路用 'x'
-LATERAL_AXIS = 'y'
+# ============================================================
+# 道路方向（车从上往下 → 前进Y轴，横向X轴）
+# ============================================================
+LATERAL_AXIS = 'x'
 
-SMOOTH_ALPHA = 0.4
-TRAIL_LENGTH = 40
 
 def main():
     video_path = os.path.join(VIDEOS_DIR, VIDEO_NAME)
-    
     if not os.path.exists(video_path):
         print(f"视频文件不存在: {video_path}")
-        print(f"请将视频文件放入 {VIDEOS_DIR} 文件夹")
         return
-    
+
     tracker = YOLOTracker()
-    
-    # ===== 传入所有参数 =====
-    tracker.trail_length = MIN_TRAIL_POINTS
+
+    # ---- 应用参数 ----
+    tracker.trail_length = TRAIL_LENGTH
     tracker.angle_step = ANGLE_STEP
-    
-    tracker.valid_y_min = VALID_Y_MIN
-    tracker.valid_y_max = VALID_Y_MAX
-    
+    tracker.smooth_alpha = SMOOTH_ALPHA
+
     tracker.short_window_size = SHORT_WINDOW_SIZE
     tracker.short_acc_threshold = SHORT_ACC_THRESHOLD
     tracker.short_consistent_ratio = SHORT_CONSISTENT_RATIO
-    
     tracker.long_window_size = LONG_WINDOW_SIZE
     tracker.long_acc_threshold = LONG_ACC_THRESHOLD
     tracker.long_consistent_ratio = LONG_CONSISTENT_RATIO
-    
+    tracker.long2_window_size = LONG2_WINDOW_SIZE
+    tracker.long2_acc_threshold = LONG2_ACC_THRESHOLD
+    tracker.long2_consistent_ratio = LONG2_CONSISTENT_RATIO
+    tracker.short_net_threshold = SHORT_NET_THRESHOLD
+    tracker.long_net_threshold = LONG_NET_THRESHOLD
+    tracker.long2_net_threshold = LONG2_NET_THRESHOLD
+    tracker.valid_y_min = VALID_Y_MIN
+    tracker.valid_y_max = VALID_Y_MAX
+    tracker.perspective_enabled = PERSPECTIVE_ENABLED
+
     tracker.trajectory_window_size = TRAJECTORY_WINDOW_SIZE
     tracker.min_lateral_shift = MIN_LATERAL_SHIFT
     tracker.min_lateral_ratio = MIN_LATERAL_RATIO
     tracker.min_x_consistent_ratio = MIN_X_CONSISTENT_RATIO
-    
-    tracker.short_net_threshold = SHORT_NET_THRESHOLD
-    tracker.long_net_threshold = LONG_NET_THRESHOLD
-    
-    tracker.smooth_alpha = SMOOTH_ALPHA
     tracker.abnormal_angle_diff_threshold = ABNORMAL_ANGLE_DIFF
     tracker.min_speed = MIN_SPEED
     tracker.lateral_axis = LATERAL_AXIS
-    
+
+    # ---- 开视频 ----
     cap = cv2.VideoCapture(video_path)
-    
     if not cap.isOpened():
         print(f"无法打开视频: {video_path}")
         return
-    
+
     ret, frame = cap.read()
     if not ret:
         print("无法读取视频帧")
         return
     h, w = frame.shape[:2]
     fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    
-    # 窗口设置（等比例缩放）
+
+    # 窗口
     max_width = 1536
     scale = max_width / w if w > max_width else 1
-    new_w = int(w * scale)
-    new_h = int(h * scale)
     cv2.namedWindow('Suspected Lane Change', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Suspected Lane Change', new_w, new_h)
-    cv2.moveWindow('Suspected Lane Change', 100, 50)
-    
-    # 视频写入器
+    cv2.resizeWindow('Suspected Lane Change', int(w * scale), int(h * scale))
+
+    # 输出视频
     out = None
     if SAVE_VIDEO:
         output_path = os.path.join(OUTPUT_DIR, OUTPUT_NAME)
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        out = cv2.VideoWriter(output_path,
-                              cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
-        print(f"结果视频将保存到: {output_path}")
-    
-    print("开始变道检测，按 'q' 退出...")
-    print(f"视频分辨率: {w}x{h}, FPS: {fps:.1f}")
-    
+        out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+        print(f"输出视频 → {output_path}")
+
+    print(f"分辨率: {w}x{h} | FPS: {fps:.1f} | 总帧数: {total_frames}")
+    print("按 'q' 退出\n")
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-        
-        # 追踪 + 画轨迹 + 变道分析
-        annotated_frame, _ = tracker.track(frame, draw_trail=True, analyze_lane_change=True)
-        
+
+        annotated_frame, _ = tracker.track(
+            frame, draw_trail=True, analyze_lane_change=True)
+
+        # 叠加信息（半透明背景 + 清晰文字）
+        fid = tracker.frame_id
+        lc_count = sum(1 for v in tracker.lane_change_results.values() if v)
+        overlay = annotated_frame.copy()
+        cv2.rectangle(overlay, (w - 230, 5), (w - 5, 75), (0, 0, 0), -1)
+        annotated_frame = cv2.addWeighted(overlay, 0.4, annotated_frame, 0.6, 0)
+        cv2.putText(annotated_frame, f"Frame: {fid}/{total_frames}",
+                    (w - 220, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+        cv2.putText(annotated_frame, f"LC: {lc_count}",
+                    (w - 220, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+
         cv2.imshow('Suspected Lane Change', annotated_frame)
-        
         if out:
             out.write(annotated_frame)
-        
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q') or key == 27:  # q 或 ESC 退出
             break
-    
-    # 导出CSV
+
+    # ---- 摘要 ----
+    lc_ids = [tid for tid, v in tracker.lane_change_results.items() if v]
+    total = len(tracker.lane_change_results)
+    print(f"\n=== 检测摘要 ===")
+    print(f"追踪车辆总数: {total}")
+    print(f"疑似变道车辆: {len(lc_ids)} 台 — ID: {lc_ids}")
+    print(f"正常行驶: {total - len(lc_ids)} 台")
+
     csv_path = os.path.join(OUTPUT_DIR, CSV_NAME)
     tracker.export_csv(csv_path)
-    
+
     cap.release()
     if out:
         out.release()
     cv2.destroyAllWindows()
     print("检测完成")
+
 
 if __name__ == "__main__":
     main()
