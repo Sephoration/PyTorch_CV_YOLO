@@ -185,6 +185,26 @@ class Random_Agent:
         return self.policy_dict[state]
 
 
+def print_policy(policy_fn):
+    """
+    以 4x4 网格显示策略: 每个格子显示动作箭头
+    policy_fn: 函数 policy_fn(state) -> action
+        动作: 0=左, 1=下, 2=右, 3=上
+    """
+    arrows = ["←", "↓", "→", "↑"]
+    labels = {5: "H", 7: "H", 11: "H", 12: "H", 15: "G"}
+    print("策略 (Policy):")
+    print("-" * 21)
+    for s in range(16):
+        if s in labels:
+            print(f"| {labels[s]:^3}", end=" ")
+        else:
+            print(f"| {arrows[policy_fn(s)]:^3}", end=" ")
+        if (s + 1) % 4 == 0:
+            print("|")
+    print("-" * 21)
+
+
 def test_game(env, pi, n_episodes=100, max_steps=100):
     """
     测试一个策略在环境中的表现
