@@ -2,13 +2,14 @@
 
 """
 T-6: 敏感区域监控 (Sensitive Zone Monitoring)
-功能：追踪 + 多边形敏感区域入侵检测 + 计时 + 截图
+功能：追踪 + 多边形敏感区域入侵检测 + 双脚检测 + 累计计时 + 截图
 
 核心逻辑：
 1. 在视频画面上定义一个多边形敏感区域
-2. 使用射线投射算法（Ray Casting）判断目标中心点是否在区域内
-3. 检测到入侵时显示红色警告，记录入侵持续时间
-4. 自动保存入侵截图（含 track_id 和时间戳）
+2. 使用射线投射算法（Ray Casting）判断目标双脚（左下角/右下角）是否在区域内
+3. 检测到入侵时显示红色警告，用黄色圆圈标注触发入侵的脚
+4. 记录目标在区域内的累计持续时间，离开暂停，再进入时继续累计
+5. 自动保存入侵截图（含 track_id 和时间戳）
 """
 
 import cv2
@@ -245,12 +246,16 @@ def main():
         for box in pred_boxes:
             x1, y1, x2, y2, lbl, track_id = box
 
-            # 使用底部中心点作为检测点（脚的位置比中心点更准确）
-            # PPT 进阶练习：从中心点改为底部中心
-            check_point = Point(x=(x1 + x2) / 2, y=y2)
+            # ===== PPT 进阶练习：双脚检测 =====
+            # 分别检查左脚（左下角）和右脚（右下角）
+            # 只要有一只脚在区域内即触发入侵报警
+            left_foot = Point(x=x1, y=y2)     # 左下角（左脚）
+            right_foot = Point(x=x2, y=y2)    # 右下角（右脚）
+            foot_in_zone = isInsidePolygon(left_foot, ZONE_POLYGON) or \
+                           isInsidePolygon(right_foot, ZONE_POLYGON)
 
-            # 判断是否在敏感区域内
-            if isInsidePolygon(check_point, ZONE_POLYGON):
+            # 判断是否在敏感区域内（任一进入即报警）
+            if foot_in_zone:
                 current_inside_ids.add(track_id)
 
                 # 初始化状态
@@ -260,19 +265,25 @@ def main():
                         'last_alert_frame': frame_id,
                         'screenshots_taken': [],
                         'total_frames_inside': 0,
+                        'is_currently_inside': True,  # 当前是否在区域内
                     }
                     # 记录类别名称
                 track_labels[track_id] = lbl
 
-                print(f"[入侵] Track {track_id} ({lbl}) 进入敏感区域 (Frame {frame_id})")
+                # 判断是否刚进入（上一帧不在区域内）
+                just_entered = (track_id not in inside_ids)
+                if just_entered:
+                    print(f"[入侵] Track {track_id} ({lbl}) 进入敏感区域 (Frame {frame_id})")
 
                 # 更新状态
                 state = intrusion_state[track_id]
                 state['total_frames_inside'] += 1
                 state['last_alert_frame'] = frame_id
+                state['is_currently_inside'] = True
 
-                # 计算持续时间
-                duration_frames = frame_id - state['entered_frame']
+                # 计算累计持续时间（累计帧数 / FPS = 实际在区域内的时间）
+                # PPT 进阶练习：离开区域暂停计时，再次进入时累计
+                duration_frames = state['total_frames_inside']
                 duration_sec = duration_frames / fps
 
                 # ===== 入侵显示 =====
@@ -299,11 +310,22 @@ def main():
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2
                 )
 
+                # ===== 双脚位置可视化 =====
+                foot_color = (0, 255, 255)  # 黄色
+                if isInsidePolygon(left_foot, ZONE_POLYGON):
+                    cv2.circle(annotated_frame, (int(x1), int(y2)), 5, foot_color, -1)
+                    cv2.putText(annotated_frame, "L", (int(x1) - 5, int(y2) - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, foot_color, 1)
+                if isInsidePolygon(right_foot, ZONE_POLYGON):
+                    cv2.circle(annotated_frame, (int(x2), int(y2)), 5, foot_color, -1)
+                    cv2.putText(annotated_frame, "R", (int(x2) - 4, int(y2) - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, foot_color, 1)
+
                 # ===== 自动截图保存 =====
                 # 只在目标第一次进入区域时截图，避免重复保存
                 if len(state['screenshots_taken']) == 0:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    screenshot_name = f"intrusion_{track_id}_{lbl}_frame{frame_id}_{timestamp}.jpg"
+                    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    screenshot_name = f"{track_id}_{timestamp}.jpg"  # PPT 格式：ID_时间.jpg
                     screenshot_path = os.path.join(SCREENSHOT_DIR, screenshot_name)
 
                     # 在截图上额外标注信息
@@ -320,6 +342,14 @@ def main():
                     cv2.imwrite(screenshot_path, screenshot)
                     state['screenshots_taken'].append(screenshot_name)
                     print(f"[截图] Track {track_id} 入侵截图已保存: {screenshot_name}")
+
+            else:
+                # 目标不在区域内 → 标记为不在区域内（暂停计时）
+                if track_id in intrusion_state:
+                    intrusion_state[track_id]['is_currently_inside'] = False
+
+        # 更新上一帧的区域内状态（用于下一帧判断"刚进入"）
+        inside_ids = current_inside_ids
 
         # ===== 统计信息（画面左上角） =====
         active_intrusions = len(current_inside_ids)
@@ -381,14 +411,15 @@ def main():
     print(f"总入侵目标数: {len(intrusion_state)}")
 
     if intrusion_state:
-        print("-" * 55)
-        print(f"{'Track ID':<10} {'类别':<10} {'持续帧数':<10} {'截图数':<10}")
-        print("-" * 55)
+        print("-" * 70)
+        print(f"{'Track ID':<10} {'类别':<10} {'累计帧数':<10} {'累计时长(s)':<13} {'截图数':<10}")
+        print("-" * 70)
         for tid, state in intrusion_state.items():
-            duration = frame_id - state['entered_frame']
+            duration_frames = state['total_frames_inside']
+            duration_sec = duration_frames / fps
             screenshot_count = len(state['screenshots_taken'])
             label = track_labels.get(tid, "unknown")
-            print(f"{tid:<10} {label:<10} {duration:<10} {screenshot_count:<10}")
+            print(f"{tid:<10} {label:<10} {duration_frames:<10} {duration_sec:<13.1f} {screenshot_count:<10}")
 
     print("=" * 55)
     print(f"截图保存目录: {SCREENSHOT_DIR}")
