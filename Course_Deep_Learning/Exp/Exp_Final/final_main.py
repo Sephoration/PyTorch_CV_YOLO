@@ -151,11 +151,12 @@ def main():
             annotated = tracker.draw_zone(annotated)
             current_inside = tracker.check_zone_intrusions(pred_boxes,
                                                            tracker.frame_id, fps)
-            # 在入侵目标上画红框
+            # 异常截图：新进入区域的目标自动裁切保存
             if current_inside:
                 for box in pred_boxes:
                     x1, y1, x2, y2, lbl, track_id = box
                     if track_id in current_inside:
+                        tracker.capture_snapshot(annotated, track_id, x1, y1, x2, y2, lbl)
                         state = tracker.zone_intrusions.get(track_id, {})
                         dur = state.get('total_frames_inside', 0) / fps
                         cv2.rectangle(annotated,

@@ -224,24 +224,4 @@ def test_game(env, pi, n_episodes=100, max_steps=100):
             state, reward, Done = env.step(action)
             steps += 1
         results.append(reward > 0)
-    return np.sum(results) / len(results)
-
-
-if __name__ == '__main__':
-    # ===== 练习: 创建 FrozenLake 实例并显示当前状态 =====
-    env = FrozenLake()
-    print("初始状态:")
-    env.show()
-    print()
-
-    # 练习: Agent 执行 action=1 (向下) 后显示状态
-    print("执行 action=1 (向下) 后:")
-    print(env.step(1))
-    env.show()
-    print()
-
-    # ===== 测试 Random Agent =====
-    print("测试 Random Agent ...")
-    agent = Random_Agent()
-    success_rate = test_game(env, agent.action, n_episodes=1000, max_steps=100)
-    print(f"Random Agent 成功率: {success_rate:.2%}")
+    return np.sum(result

@@ -6,6 +6,7 @@ YOLO Tracker 基础类 — 期末报告整合版
   - 动态轨迹颜色 (每 ID 不同色)
   - 分车型计数 (car/truck/bus)
   - 敏感区域监控 (多边形 + 射线投射)
+  - 异常对象截图 (进入区域自动裁切保存)
   - FPS 显示
 """
 
@@ -13,6 +14,7 @@ import cv2
 import math
 import time
 import hashlib
+from datetime import datetime
 import numpy as np
 import os
 from ultralytics import YOLO
@@ -27,7 +29,9 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(PROJECT_ROOT))  # Course_Deep_Lear
 MODELS_DIR = os.path.join(PROJECT_ROOT, 'models')
 VIDEOS_DIR = os.path.join(PROJECT_ROOT, 'videos')
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, 'videos_output')
+SNAPSHOTS_DIR = os.path.join(PROJECT_ROOT, 'snapshots')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
 
 # ========== 模型搜寻路径（多来源） ==========
 DEFAULT_MODEL_PATHS = [
@@ -209,6 +213,11 @@ class YOLOTracker:
         self.zone_enabled = False
         self.zone_intrusions = {}           # {track_id: {...}}
         self.zone_inside_ids = set()        # 上一帧在区域内者
+
+        # ---- 期末：异常截图 ----
+        self.snapshot_enabled = True
+        self.snapshot_dir = SNAPSHOTS_DIR
+        self._snapshot_logged = set()       # 已截图过的 track_id 避免重复
 
     # ==================== 模型查找 ====================
     def _find_model(self):
@@ -606,6 +615,33 @@ class YOLOTracker:
         self.zone_inside_ids = current_inside
 
         return current_inside
+
+    # ==================== 异常截图 ====================
+    def capture_snapshot(self, frame, track_id, x1, y1, x2, y2, lbl):
+        """进入区域时对目标裁切截图，保存为 ID_时间.jpg（每 ID 仅存一次）"""
+        if not self.snapshot_enabled:
+            return None
+        if track_id in self._snapshot_logged:
+            return None
+
+        # 边界保护
+        h, w = frame.shape[:2]
+        x1_i, y1_i = max(0, int(x1)), max(0, int(y1))
+        x2_i, y2_i = min(w, int(x2)), min(h, int(y2))
+        if x2_i <= x1_i or y2_i <= y1_i:
+            return None
+
+        crop = frame[y1_i:y2_i, x1_i:x2_i]
+        if crop.size == 0:
+            return None
+
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"{track_id}_{ts}.jpg"
+        save_path = os.path.join(self.snapshot_dir, filename)
+        cv2.imwrite(save_path, crop)
+        self._snapshot_logged.add(track_id)
+        print(f"[截图] {lbl}(ID:{track_id}) 已保存 → {save_path}")
+        return save_path
 
     # ==================== 工具 ====================
     def draw_fps(self, frame, x=10, y=25):

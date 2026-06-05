@@ -146,6 +146,8 @@ class VideoThread(QThread):
                     for box in pred_boxes:
                         x1, y1, x2, y2, lbl, track_id = box
                         if track_id in current_inside:
+                            self.tracker.capture_snapshot(
+                                annotated, track_id, x1, y1, x2, y2, lbl)
                             state = self.tracker.zone_intrusions.get(track_id, {})
                             dur = state.get('total_frames_inside', 0) / fps
                             cv2.rectangle(annotated, (int(x1), int(y1)),
@@ -289,7 +291,6 @@ class MainWindow(QMainWindow):
 
         # ---- 右侧：资讯面板 ----
         right = QVBoxLayout()
-        right.setMaximumWidth(320)
 
         # 计数统计
         count_group = QGroupBox("📊 车辆计数统计")
