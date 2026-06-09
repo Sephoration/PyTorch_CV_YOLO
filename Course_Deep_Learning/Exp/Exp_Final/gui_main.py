@@ -205,7 +205,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("期末报告 — 目标追踪与分类计数系统")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1100, 600)
+        self.resize(1280, 680)
 
         # 状态
         self.thread = None
@@ -229,72 +230,89 @@ class MainWindow(QMainWindow):
         file_menu.addAction(exit_action)
 
     def _init_ui(self):
+        # ---- 整体容器 ----
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setSpacing(8)
 
-        # ---- 左侧：影片显示区 ----
+        # ============================================================
+        # 左侧：影片 + 底部两行控制
+        # ============================================================
         left = QVBoxLayout()
+        left.setSpacing(6)
 
         self.video_label = QLabel("请开启影片 (Ctrl+O)")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(640, 480)
         self.video_label.setStyleSheet("QLabel { background-color: #1a1a1a; color: #888; "
                                         "border: 2px solid #333; font-size: 18px; }")
-        left.addWidget(self.video_label)
+        left.addWidget(self.video_label, stretch=1)
 
-        # 控制列
-        ctrl = QHBoxLayout()
-        self.btn_open = QPushButton("📂 开启影片")
+        # --- 第一行：控制按钮 + 信息（紧凑） ---
+        row1 = QHBoxLayout()
+        row1.setSpacing(6)
+
+        self.btn_open = QPushButton("📂 开启")
         self.btn_open.clicked.connect(self.open_video)
-        ctrl.addWidget(self.btn_open)
+        row1.addWidget(self.btn_open)
 
         self.btn_play = QPushButton("▶ 播放")
         self.btn_play.clicked.connect(self.toggle_play)
         self.btn_play.setEnabled(False)
-        ctrl.addWidget(self.btn_play)
+        row1.addWidget(self.btn_play)
 
         self.btn_stop = QPushButton("⏹ 停止")
         self.btn_stop.clicked.connect(self.stop_video)
         self.btn_stop.setEnabled(False)
-        ctrl.addWidget(self.btn_stop)
+        row1.addWidget(self.btn_stop)
+
+        row1.addStretch()
 
         self.fps_label = QLabel("FPS: --")
-        self.fps_label.setStyleSheet("font-weight: bold; color: #0a0;")
-        ctrl.addWidget(self.fps_label)
+        self.fps_label.setStyleSheet("font-weight: bold; color: #0a0; padding: 2px 8px;")
+        row1.addWidget(self.fps_label)
 
         self.frame_label = QLabel("Frame: 0 / 0")
-        self.frame_label.setStyleSheet("color: #888;")
-        ctrl.addWidget(self.frame_label)
+        self.frame_label.setStyleSheet("color: #aaa; padding: 2px 8px;")
+        row1.addWidget(self.frame_label)
 
-        left.addLayout(ctrl)
+        left.addLayout(row1)
 
-        # 选项列
-        opt = QHBoxLayout()
-        self.chk_zone = QCheckBox("敏感区域")
-        self.chk_zone.setChecked(True)
-        self.chk_zone.stateChanged.connect(self._on_option_change)
-        opt.addWidget(self.chk_zone)
-
-        self.chk_count = QCheckBox("计数线")
-        self.chk_count.setChecked(True)
-        self.chk_count.stateChanged.connect(self._on_option_change)
-        opt.addWidget(self.chk_count)
+        # --- 第二行：三个勾选项（紧凑） ---
+        row2 = QHBoxLayout()
+        row2.setSpacing(10)
 
         self.chk_color = QCheckBox("彩色轨迹")
         self.chk_color.setChecked(True)
         self.chk_color.stateChanged.connect(self._on_option_change)
-        opt.addWidget(self.chk_color)
+        row2.addWidget(self.chk_color)
 
-        opt.addStretch()
-        left.addLayout(opt)
+        self.chk_count = QCheckBox("计数线")
+        self.chk_count.setChecked(True)
+        self.chk_count.stateChanged.connect(self._on_option_change)
+        row2.addWidget(self.chk_count)
 
-        # ---- 右侧：资讯面板 ----
+        self.chk_zone = QCheckBox("敏感区域")
+        self.chk_zone.setChecked(True)
+        self.chk_zone.stateChanged.connect(self._on_option_change)
+        row2.addWidget(self.chk_zone)
+
+        row2.addStretch()
+        left.addLayout(row2)
+
+        # ============================================================
+        # 右侧：三个信息面板（紧凑叠放）
+        # ============================================================
         right = QVBoxLayout()
+        right.setSpacing(6)
 
-        # 计数统计
+        # --- 面板 1：车辆计数统计 ---
         count_group = QGroupBox("📊 车辆计数统计")
         count_grid = QGridLayout()
+        count_grid.setSpacing(4)
+        count_grid.setContentsMargins(8, 12, 8, 8)
 
         count_grid.addWidget(QLabel("车种"), 0, 0)
         count_grid.addWidget(QLabel("进入 ↑"), 0, 1)
@@ -323,45 +341,47 @@ class MainWindow(QMainWindow):
         count_group.setLayout(count_grid)
         right.addWidget(count_group)
 
-        # 敏感区域资讯
-        zone_group = QGroupBox("🚨 敏感区域状态")
+        # --- 面板 2：敏感区域入侵状态 ---
+        zone_group = QGroupBox("🚨 敏感区域入侵状态")
         zone_layout = QVBoxLayout()
+        zone_layout.setContentsMargins(8, 12, 8, 8)
         self.zone_text = QTextEdit()
         self.zone_text.setReadOnly(True)
-        self.zone_text.setMaximumHeight(120)
         self.zone_text.setText("等待检测...")
+        self.zone_text.setStyleSheet("font-size: 12px;")
         zone_layout.addWidget(self.zone_text)
         zone_group.setLayout(zone_layout)
-        right.addWidget(zone_group)
+        right.addWidget(zone_group, stretch=1)  # stretch=1 填满剩余高度
 
-        # 操作说明
-        help_group = QGroupBox("💡 操作说明")
-        help_layout = QVBoxLayout()
-        help_text = QLabel(
-            "Ctrl+O  : 开启影片\n"
-            "▶/⏸    : 播放 / 暂停\n"
-            "⏹      : 停止重置\n\n"
-            "计数：车辆跨越黄线自动统计\n"
-            "区域：红色多边形为敏感区域\n"
-            "轨迹：每辆车不同颜色"
+        # --- 面板 3：备注 ---
+        note_group = QGroupBox("📝 备注")
+        note_layout = QVBoxLayout()
+        note_layout.setContentsMargins(8, 12, 8, 8)
+        note_text = QLabel(
+            "Ctrl+O 开启影片\n"
+            "▶ 播放  ⏸ 暂停  ⏹ 停止重置\n\n"
+            "• 黄线 = 计数参考线\n"
+            "• 红区 = 敏感监控区域\n"
+            "• 彩色轨迹 = 每辆车不同色"
         )
-        help_text.setStyleSheet("color: #aaa; font-size: 12px;")
-        help_layout.addWidget(help_text)
-        help_group.setLayout(help_layout)
-        right.addWidget(help_group)
+        note_text.setStyleSheet("color: #aaa; font-size: 12px;")
+        note_layout.addWidget(note_text)
+        note_group.setLayout(note_layout)
+        right.addWidget(note_group)
 
-        right.addStretch()
-
-        # 分隔左右
+        # ============================================================
+        # 组装：QSplitter 左右分栏
+        # ============================================================
         splitter = QSplitter(Qt.Horizontal)
         left_widget = QWidget()
         left_widget.setLayout(left)
         right_widget = QWidget()
         right_widget.setLayout(right)
+        right_widget.setFixedWidth(300)
         splitter.addWidget(left_widget)
         splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)   # 右侧固定宽度不伸缩
 
         main_layout.addWidget(splitter)
 
