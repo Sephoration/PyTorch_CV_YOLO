@@ -52,7 +52,7 @@ if PROJECT_DIR:
 
 
 # ========== 全局配置 ==========
-OBJ_LIST = ['person', 'car', 'bus', 'truck']
+OBJ_LIST = ['car', 'bus', 'truck']
 COLORS = {
     'person': (0, 255, 0),
     'car': (255, 0, 0),
@@ -202,7 +202,7 @@ class YOLOTracker:
             'car':   {'in': 0, 'out': 0},
             'bus':   {'in': 0, 'out': 0},
             'truck': {'in': 0, 'out': 0},
-            'person':{'in': 0, 'out': 0},
+            # person 已排除检测
         }
         self._count_history = {}            # {track_id: {'last_side': 'above'/'below', 'counted': False}}
 
@@ -306,15 +306,73 @@ class YOLOTracker:
         return False, None
 
     def judge_lane_change_by_triple_window(self, diffs, scale=1.0):
-        for ws, acc, r in [
-            (self.short_window_size, self.short_acc_threshold, self.short_consistent_ratio),
-            (self.long_window_size, self.long_acc_threshold, self.long_consistent_ratio),
-            (self.long2_window_size, self.long2_acc_threshold, self.long2_consistent_ratio),
+        for ws, acc, r, name in [
+            (self.short_window_size, self.short_acc_threshold, self.short_consistent_ratio, 'short'),
+            (self.long_window_size, self.long_acc_threshold, self.long_consistent_ratio, 'long'),
+            (self.long2_window_size, self.long2_acc_threshold, self.long2_consistent_ratio, 'long2'),
         ]:
             ok, _ = self.judge_lane_change_by_window(diffs, ws, acc, r, scale)
             if ok:
-                return True
+                return True, name
+        return False, None
+
+    # ==================== 净角度变化检查（期中完整版） ====================
+    def judge_net_angle_change(self, diffs, ws, net_th, scale=1.0):
+        if len(diffs) < ws:
+            return False
+        w = diffs[-ws:]
+        pos = sum(d for d in w if d > 0)
+        neg = sum(abs(d) for d in w if d < 0)
+        return abs(pos - neg) >= net_th * scale
+
+    def judge_net_angle_change_by_triple_window(self, diffs, trigger_type, scale=1.0):
+        if trigger_type == 'short':
+            return self.judge_net_angle_change(diffs, self.short_window_size, self.short_net_threshold, scale)
+        if trigger_type == 'long':
+            return self.judge_net_angle_change(diffs, self.long_window_size, self.long_net_threshold, scale)
+        if trigger_type == 'long2':
+            return self.judge_net_angle_change(diffs, self.long2_window_size, self.long2_net_threshold, scale)
         return False
+
+    # ==================== 横向位移确认（期中完整版） ====================
+    def judge_lateral_shift_by_trail(self, trail, scale=1.0):
+        if len(trail) < self.trajectory_window_size:
+            return False
+        recent = trail[-self.trajectory_window_size:]
+        sx, sy = recent[0]
+        ex, ey = recent[-1]
+        dx, dy = ex - sx, ey - sy
+
+        if self.lateral_axis == 'y':
+            lateral_disp, forward_disp = dy, dx
+            axis_diffs = [recent[i][1] - recent[i-1][1] for i in range(1, len(recent))]
+        else:
+            lateral_disp, forward_disp = dx, dy
+            axis_diffs = [recent[i][0] - recent[i-1][0] for i in range(1, len(recent))]
+
+        scaled_pixel = self.min_lateral_shift * scale
+        scaled_ratio = self.min_lateral_ratio * scale
+
+        if abs(lateral_disp) < scaled_pixel:
+            return False
+        if abs(lateral_disp) / (abs(forward_disp) + 1e-6) < scaled_ratio:
+            return False
+        if len(axis_diffs) == 0:
+            return False
+
+        pc = sum(1 for d in axis_diffs if d > 0)
+        nc = sum(1 for d in axis_diffs if d < 0)
+        cr = pc / len(axis_diffs) if lateral_disp > 0 else nc / len(axis_diffs) if lateral_disp < 0 else 0
+        return cr >= self.min_x_consistent_ratio
+
+    def get_motion_vector(self, p1, p2):
+        return (p2[0] - p1[0], p2[1] - p1[1])
+
+    def get_vector_angle_deg(self, vec):
+        vx, vy = vec
+        if vx == 0 and vy == 0:
+            return None
+        return math.degrees(math.atan2(vy, vx))
 
     # ==================== 核心追踪 ====================
     def track(self, frame, draw_trail=False, analyze_lane_change=False):
@@ -429,14 +487,14 @@ class YOLOTracker:
         # 当从 below → above 跨越：in（往上）
         if hist['last_side'] == 'above' and side == 'below' and not hist['counted']:
             direction = 'out'
-            lbl_key = lbl if lbl in self.count_data else 'person'
+            lbl_key = lbl if lbl in self.count_data else 'car'
             self.count_data[lbl_key][direction] += 1
             hist['counted'] = True
             print(f"[计数] {lbl}(ID:{track_id}) {direction} → "
                   f"{lbl_key}={self.count_data[lbl_key]}")
         elif hist['last_side'] == 'below' and side == 'above' and not hist['counted']:
             direction = 'in'
-            lbl_key = lbl if lbl in self.count_data else 'person'
+            lbl_key = lbl if lbl in self.count_data else 'car'
             self.count_data[lbl_key][direction] += 1
             hist['counted'] = True
             print(f"[计数] {lbl}(ID:{track_id}) {direction} → "
@@ -449,7 +507,7 @@ class YOLOTracker:
 
     def _analyze_lane_change(self, frame, track_id, lbl, cx, cy,
                               x1, y1, x2, y2, smooth_center):
-        """变道分析（保留期中功能）"""
+        """变道分析 — 三关验证（角度 + 净角度 + 横向位移，参照期中完整版）"""
         if not self.in_valid_y_zone(cy):
             return
 
@@ -459,12 +517,12 @@ class YOLOTracker:
 
         p1 = trail_use[-1 - self.angle_step]
         p2 = trail_use[-1]
-        vx, vy = p2[0] - p1[0], p2[1] - p1[1]
+        vx, vy = self.get_motion_vector(p1, p2)
         motion_mag = math.sqrt(vx**2 + vy**2)
         if motion_mag < self.min_speed:
             return
 
-        angle = math.degrees(math.atan2(vy, vx))
+        angle = self.get_vector_angle_deg((vx, vy))
         if angle is None:
             return
 
@@ -480,11 +538,23 @@ class YOLOTracker:
                 self.angle_diffs[track_id].append(ad)
 
         p_scale = self.get_perspective_scale(cy)
-        angle_ok = self.judge_lane_change_by_triple_window(
+
+        # 第一关：三窗口角度检查
+        angle_ok, trigger_type = self.judge_lane_change_by_triple_window(
             self.angle_diffs.get(track_id, []), p_scale)
-        if angle_ok:
-            if track_id not in self.lane_change_results:
-                self.lane_change_results[track_id] = True
+
+        if angle_ok and trigger_type:
+            # 第二关：净角度变化（过滤振荡）
+            net_angle_ok = self.judge_net_angle_change_by_triple_window(
+                self.angle_diffs.get(track_id, []), trigger_type, p_scale)
+
+            # 第三关：横向位移确认
+            lateral_ok = self.judge_lateral_shift_by_trail(trail_use, p_scale)
+
+            # 三关全过 → 确认为变道
+            if net_angle_ok and lateral_ok:
+                if track_id not in self.lane_change_results:
+                    self.lane_change_results[track_id] = True
 
     # ==================== 绘制方法 ====================
     def _draw_boxes(self, im, boxes):
@@ -532,9 +602,9 @@ class YOLOTracker:
         cv2.line(frame, (int(lx), int(ly)), (int(rx), int(ry)), line_color, thickness)
         # 标注方向
         mid_x, mid_y = (lx + rx) // 2, (ly + ry) // 2
-        cv2.putText(frame, "▲ IN", (int(mid_x) - 60, int(mid_y) - 10),
+        cv2.putText(frame, "IN ^", (int(mid_x) - 50, int(mid_y) - 10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, line_color, 2)
-        cv2.putText(frame, "▼ OUT", (int(mid_x) + 10, int(mid_y) + 25),
+        cv2.putText(frame, "OUT v", (int(mid_x) + 10, int(mid_y) + 25),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, line_color, 2)
         return frame
 
@@ -585,10 +655,16 @@ class YOLOTracker:
 
         for box in pred_boxes:
             x1, y1, x2, y2, lbl, track_id = box
+            # 检查左、中、右三个底点，≥2 点在区内才判定入侵(>1/2车身)
             left_foot = Point(x=x1, y=y2)
+            center_foot = Point(x=(x1+x2)/2, y=y2)
             right_foot = Point(x=x2, y=y2)
-            foot_in = isInsidePolygon(left_foot, self.zone_polygon) or \
-                      isInsidePolygon(right_foot, self.zone_polygon)
+            points_inside = sum([
+                isInsidePolygon(left_foot, self.zone_polygon),
+                isInsidePolygon(center_foot, self.zone_polygon),
+                isInsidePolygon(right_foot, self.zone_polygon),
+            ])
+            foot_in = points_inside >= 2
 
             if foot_in:
                 current_inside.add(track_id)
@@ -654,7 +730,7 @@ class YOLOTracker:
     def get_count_summary(self):
         """取得计数摘要文字"""
         lines = []
-        for cls_name in ['car', 'bus', 'truck', 'person']:
+        for cls_name in ['car', 'bus', 'truck']:
             d = self.count_data.get(cls_name, {'in': 0, 'out': 0})
             total = d['in'] + d['out']
             if total > 0:

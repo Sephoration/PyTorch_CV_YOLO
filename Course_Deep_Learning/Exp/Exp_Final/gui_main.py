@@ -8,6 +8,7 @@
   - 敏感区域监控
   - FPS 显示
   - 计数统计表
+  - 参数控制 (置信度/轨迹长度)
 
 执行：
   python gui_main.py
@@ -43,6 +44,7 @@ class VideoThread(QThread):
     update_fps = Signal(float)
     update_zone = Signal(list)
     frame_processed = Signal(int, int)
+    snapshot_taken = Signal(str)
 
     def __init__(self, video_path=None):
         super().__init__()
@@ -55,6 +57,8 @@ class VideoThread(QThread):
         self.show_zone = True
         self.show_count = True
         self.colorful_trail = True
+        self.show_lane_change = False
+        self.show_trail = True
 
         # 影片来源搜寻
         self.search_dirs = [
@@ -63,12 +67,12 @@ class VideoThread(QThread):
             os.path.join(PROJECT_ROOT, '..', '..', 'YOLO26Tracking', 'videos'),
         ]
 
-        # 敏感区域多边形（相对比例）
+        # 敏感区域多边形（相对比例）— 梯形：底部宽(近端)、顶部窄(远端)
         self.ZONE_RATIO = [
-            (0.15, 0.95),
-            (0.85, 0.95),
-            (0.75, 0.40),
-            (0.25, 0.40),
+            (0.12, 0.93),   # 左下 (近端)
+            (0.88, 0.93),   # 右下 (近端)
+            (0.66, 0.55),   # 右上 (远端)
+            (0.34, 0.55),   # 左上 (远端)
         ]
 
     def find_video(self, filename):
@@ -133,8 +137,11 @@ class VideoThread(QThread):
             if not ret:
                 break
 
-            # 追踪
-            annotated, pred_boxes = self.tracker.track(frame, draw_trail=True)
+            # 追踪（含变道分析、轨迹开关）
+            annotated, pred_boxes = self.tracker.track(
+                frame, draw_trail=self.show_trail,
+                analyze_lane_change=self.show_lane_change
+            )
 
             # 敏感区域
             if self.show_zone:
@@ -146,18 +153,14 @@ class VideoThread(QThread):
                     for box in pred_boxes:
                         x1, y1, x2, y2, lbl, track_id = box
                         if track_id in current_inside:
-                            self.tracker.capture_snapshot(
+                            snap_path = self.tracker.capture_snapshot(
                                 annotated, track_id, x1, y1, x2, y2, lbl)
-                            state = self.tracker.zone_intrusions.get(track_id, {})
-                            dur = state.get('total_frames_inside', 0) / fps
-                            cv2.rectangle(annotated, (int(x1), int(y1)),
-                                          (int(x2), int(y2)), (0, 0, 255), 3)
-                            cv2.putText(annotated, f"INTRUSION! {lbl}({track_id})",
-                                        (int(x1), int(y1) - 10),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                            cv2.putText(annotated, f"Time: {dur:.1f}s",
-                                        (int(x1), int(y2) + 25),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                            if snap_path:
+                                self.snapshot_taken.emit(snap_path)
+                            # 仅将文字标红（保持框原色）
+                            cv2.putText(annotated, f"{lbl}({track_id})",
+                                        (int(x1), int(y1) - 5),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
             # 计数线
             if self.show_count:
@@ -213,102 +216,109 @@ class MainWindow(QMainWindow):
         self.current_video = None
 
         self._init_ui()
-        self._init_menu()
-
-    def _init_menu(self):
-        menubar = self.menuBar()
-        file_menu = menubar.addMenu("档案(&F)")
-
-        open_action = QAction("开启影片...", self)
-        open_action.setShortcut("Ctrl+O")
-        open_action.triggered.connect(self.open_video)
-        file_menu.addAction(open_action)
-
-        exit_action = QAction("结束", self)
-        exit_action.setShortcut("Ctrl+Q")
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
 
     def _init_ui(self):
         # ---- 整体容器 ----
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(6, 6, 6, 6)
-        main_layout.setSpacing(8)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(8, 8, 8, 6)
+        main_layout.setSpacing(6)
+
+        # ---- 顶栏标题 ----
+        title_bar = QHBoxLayout()
+        title_label = QLabel("🎯 目标追踪与分类计数系统")
+        title_label.setFont(QFont("Microsoft YaHei", 14, QFont.Bold))
+        title_label.setStyleSheet("color: #1a365d; padding: 2px 0;")
+        title_bar.addWidget(title_label)
+        title_bar.addStretch()
+        main_layout.addLayout(title_bar)
 
         # ============================================================
-        # 左侧：影片 + 底部两行控制
+        # 主体：左影片 + 右面板
         # ============================================================
+        body_layout = QHBoxLayout()
+        body_layout.setSpacing(8)
+
+        # --------------------------------------------------
+        # 左侧：影片 + 底部控制
+        # --------------------------------------------------
         left = QVBoxLayout()
         left.setSpacing(6)
 
-        self.video_label = QLabel("请开启影片 (Ctrl+O)")
+        self.video_label = QLabel("请开启影片 (点击下方 [📂开启])")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(640, 480)
         self.video_label.setStyleSheet("QLabel { background-color: #1a1a1a; color: #888; "
                                         "border: 2px solid #333; font-size: 18px; }")
         left.addWidget(self.video_label, stretch=1)
 
-        # --- 第一行：控制按钮 + 信息（紧凑） ---
-        row1 = QHBoxLayout()
-        row1.setSpacing(6)
+        # --- 控制行 ---
+        row_ctrl = QHBoxLayout()
+        row_ctrl.setSpacing(6)
 
         self.btn_open = QPushButton("📂 开启")
         self.btn_open.clicked.connect(self.open_video)
-        row1.addWidget(self.btn_open)
+        row_ctrl.addWidget(self.btn_open)
 
         self.btn_play = QPushButton("▶ 播放")
         self.btn_play.clicked.connect(self.toggle_play)
         self.btn_play.setEnabled(False)
-        row1.addWidget(self.btn_play)
+        row_ctrl.addWidget(self.btn_play)
 
         self.btn_stop = QPushButton("⏹ 停止")
         self.btn_stop.clicked.connect(self.stop_video)
         self.btn_stop.setEnabled(False)
-        row1.addWidget(self.btn_stop)
+        row_ctrl.addWidget(self.btn_stop)
 
-        row1.addStretch()
+        row_ctrl.addStretch()
 
         self.fps_label = QLabel("FPS: --")
         self.fps_label.setStyleSheet("font-weight: bold; color: #0a0; padding: 2px 8px;")
-        row1.addWidget(self.fps_label)
+        row_ctrl.addWidget(self.fps_label)
 
         self.frame_label = QLabel("Frame: 0 / 0")
         self.frame_label.setStyleSheet("color: #aaa; padding: 2px 8px;")
-        row1.addWidget(self.frame_label)
+        row_ctrl.addWidget(self.frame_label)
 
-        left.addLayout(row1)
+        left.addLayout(row_ctrl)
 
-        # --- 第二行：三个勾选项（紧凑） ---
-        row2 = QHBoxLayout()
-        row2.setSpacing(10)
+        # --- 选项行 ---
+        row_opt = QHBoxLayout()
+        row_opt.setSpacing(10)
 
-        self.chk_color = QCheckBox("彩色轨迹")
+        self.chk_color = QCheckBox("车辆轨迹")
         self.chk_color.setChecked(True)
         self.chk_color.stateChanged.connect(self._on_option_change)
-        row2.addWidget(self.chk_color)
+        row_opt.addWidget(self.chk_color)
 
         self.chk_count = QCheckBox("计数线")
         self.chk_count.setChecked(True)
         self.chk_count.stateChanged.connect(self._on_option_change)
-        row2.addWidget(self.chk_count)
+        row_opt.addWidget(self.chk_count)
 
         self.chk_zone = QCheckBox("敏感区域")
         self.chk_zone.setChecked(True)
         self.chk_zone.stateChanged.connect(self._on_option_change)
-        row2.addWidget(self.chk_zone)
+        row_opt.addWidget(self.chk_zone)
 
-        row2.addStretch()
-        left.addLayout(row2)
+        self.chk_lane = QCheckBox("🔄 变道分析")
+        self.chk_lane.setChecked(False)
+        self.chk_lane.stateChanged.connect(self._on_option_change)
+        row_opt.addWidget(self.chk_lane)
 
-        # ============================================================
-        # 右侧：三个信息面板（紧凑叠放）
-        # ============================================================
+        row_opt.addStretch()
+        left.addLayout(row_opt)
+
+        body_layout.addLayout(left, stretch=1)
+
+        # --------------------------------------------------
+        # 右侧：信息面板
+        # --------------------------------------------------
         right = QVBoxLayout()
         right.setSpacing(6)
 
-        # --- 面板 1：车辆计数统计 ---
+        # 车辆计数统计
         count_group = QGroupBox("📊 车辆计数统计")
         count_grid = QGridLayout()
         count_grid.setSpacing(4)
@@ -341,7 +351,44 @@ class MainWindow(QMainWindow):
         count_group.setLayout(count_grid)
         right.addWidget(count_group)
 
-        # --- 面板 2：敏感区域入侵状态 ---
+        # --- 参数控制 ---
+        param_group = QGroupBox("⚙ 参数控制")
+        param_layout = QVBoxLayout()
+        param_layout.setSpacing(4)
+        param_layout.setContentsMargins(8, 12, 8, 8)
+
+        # 置信度
+        conf_row = QHBoxLayout()
+        conf_row.addWidget(QLabel("置信度:"))
+        self.lbl_conf_val = QLabel("0.35")
+        self.lbl_conf_val.setStyleSheet("font-weight: bold; color: #2b6e9c;")
+        conf_row.addWidget(self.lbl_conf_val)
+        param_layout.addLayout(conf_row)
+
+        self.slider_conf = QSlider(Qt.Horizontal)
+        self.slider_conf.setRange(5, 95)
+        self.slider_conf.setValue(35)
+        self.slider_conf.valueChanged.connect(self._on_param_conf_changed)
+        param_layout.addWidget(self.slider_conf)
+
+        # 轨迹长度
+        trail_row = QHBoxLayout()
+        trail_row.addWidget(QLabel("轨迹长度:"))
+        self.lbl_trail_val = QLabel("80")
+        self.lbl_trail_val.setStyleSheet("font-weight: bold; color: #2b6e9c;")
+        trail_row.addWidget(self.lbl_trail_val)
+        param_layout.addLayout(trail_row)
+
+        self.slider_trail = QSlider(Qt.Horizontal)
+        self.slider_trail.setRange(10, 200)
+        self.slider_trail.setValue(80)
+        self.slider_trail.valueChanged.connect(self._on_param_trail_changed)
+        param_layout.addWidget(self.slider_trail)
+
+        param_group.setLayout(param_layout)
+        right.addWidget(param_group)
+
+        # 敏感区域入侵状态
         zone_group = QGroupBox("🚨 敏感区域入侵状态")
         zone_layout = QVBoxLayout()
         zone_layout.setContentsMargins(8, 12, 8, 8)
@@ -351,15 +398,29 @@ class MainWindow(QMainWindow):
         self.zone_text.setStyleSheet("font-size: 12px;")
         zone_layout.addWidget(self.zone_text)
         zone_group.setLayout(zone_layout)
-        right.addWidget(zone_group, stretch=1)  # stretch=1 填满剩余高度
+        right.addWidget(zone_group)
 
-        # --- 面板 3：备注 ---
+        # --- 入侵截图 ---
+        snap_group = QGroupBox("📸 入侵截图")
+        snap_layout = QVBoxLayout()
+        snap_layout.setContentsMargins(8, 12, 8, 8)
+        snap_layout.setSpacing(4)
+        self.lbl_snap_count = QLabel("截图数: 0")
+        self.lbl_snap_count.setStyleSheet("font-size: 12px; color: #555;")
+        snap_layout.addWidget(self.lbl_snap_count)
+        self.btn_open_snap = QPushButton("📂 打开截图文件夹")
+        self.btn_open_snap.clicked.connect(self._open_snapshots_folder)
+        snap_layout.addWidget(self.btn_open_snap)
+        snap_group.setLayout(snap_layout)
+        right.addWidget(snap_group)
+
+        # 备注
         note_group = QGroupBox("📝 备注")
         note_layout = QVBoxLayout()
         note_layout.setContentsMargins(8, 12, 8, 8)
         note_text = QLabel(
-            "Ctrl+O 开启影片\n"
-            "▶ 播放  ⏸ 暂停  ⏹ 停止重置\n\n"
+            "[📂开启] 打开影片\n"
+            "[▶ 播放]  [⏸ 暂停]  [⏹ 停止]\n"
             "• 黄线 = 计数参考线\n"
             "• 红区 = 敏感监控区域\n"
             "• 彩色轨迹 = 每辆车不同色"
@@ -369,21 +430,12 @@ class MainWindow(QMainWindow):
         note_group.setLayout(note_layout)
         right.addWidget(note_group)
 
-        # ============================================================
-        # 组装：QSplitter 左右分栏
-        # ============================================================
-        splitter = QSplitter(Qt.Horizontal)
-        left_widget = QWidget()
-        left_widget.setLayout(left)
         right_widget = QWidget()
         right_widget.setLayout(right)
         right_widget.setFixedWidth(300)
-        splitter.addWidget(left_widget)
-        splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)   # 右侧固定宽度不伸缩
+        body_layout.addWidget(right_widget)
 
-        main_layout.addWidget(splitter)
+        main_layout.addLayout(body_layout, stretch=1)
 
     # ==================== 影片控制 ====================
     def open_video(self):
@@ -402,6 +454,8 @@ class MainWindow(QMainWindow):
         self.btn_play.setText("⏸ 暂停")
         self.btn_play.setEnabled(True)
         self.btn_stop.setEnabled(True)
+        # 同步参数到线程
+        self._sync_params_to_thread()
         self._run_thread()
 
     def _run_thread(self):
@@ -418,6 +472,7 @@ class MainWindow(QMainWindow):
         self.thread.frame_processed.connect(
             lambda cur, total: self.frame_label.setText(f"Frame: {cur}/{total}")
         )
+        self.thread.snapshot_taken.connect(self._on_snapshot_taken)
         self.thread.finished.connect(self._on_thread_finished)
         self.thread.start()
 
@@ -440,7 +495,7 @@ class MainWindow(QMainWindow):
         self.fps_label.setText("FPS: --")
         self.frame_label.setText("Frame: 0 / 0")
         self.video_label.setPixmap(QPixmap())
-        self.video_label.setText("请开启影片 (Ctrl+O)")
+        self.video_label.setText("请开启影片 (点击下方 [📂开启])")
         self._reset_count_display()
         self.zone_text.setText("等待检测...")
 
@@ -449,9 +504,26 @@ class MainWindow(QMainWindow):
         if self.thread and self.thread.tracker:
             self.thread.show_zone = self.chk_zone.isChecked()
             self.thread.show_count = self.chk_count.isChecked()
-            self.thread.colorful_trail = self.chk_color.isChecked()
+            self.thread.show_trail = self.chk_color.isChecked()
+            self.thread.show_lane_change = self.chk_lane.isChecked()
             if self.thread.tracker:
                 self.thread.tracker.colorful_trail = self.chk_color.isChecked()
+
+    # ==================== 参数控制 ====================
+    def _sync_params_to_thread(self):
+        """将参数面板的值同步到线程（开始播放前调用）"""
+        pass  # 参数会在 slider 回调中实时同步
+
+    def _on_param_conf_changed(self, val):
+        v = val / 100.0
+        self.lbl_conf_val.setText(f"{v:.2f}")
+        if self.thread and self.thread.tracker:
+            self.thread.tracker.conf = v
+
+    def _on_param_trail_changed(self, val):
+        self.lbl_trail_val.setText(str(val))
+        if self.thread and self.thread.tracker:
+            self.thread.tracker.trail_length = val
 
     # ==================== GUI 更新 ====================
     def _update_image(self, cv_img):
@@ -496,6 +568,24 @@ class MainWindow(QMainWindow):
         self.btn_play.setText("▶ 播放")
         self.btn_play.setEnabled(False)
         self.btn_stop.setEnabled(False)
+
+    # ==================== 截图 ====================
+    def _on_snapshot_taken(self, path):
+        """截图完成时更新计数"""
+        if not hasattr(self, '_snap_count'):
+            self._snap_count = 0
+        self._snap_count += 1
+        self.lbl_snap_count.setText(f"截图数: {self._snap_count}")
+
+    def _open_snapshots_folder(self):
+        """打开截图文件夹"""
+        from yolo_tracker_base import SNAPSHOTS_DIR
+        snap_dir = os.path.abspath(SNAPSHOTS_DIR)
+        if os.path.exists(snap_dir):
+            os.startfile(snap_dir)
+        else:
+            os.makedirs(snap_dir, exist_ok=True)
+            os.startfile(snap_dir)
 
     def closeEvent(self, event):
         self.stop_video()
