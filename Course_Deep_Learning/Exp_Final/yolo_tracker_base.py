@@ -52,7 +52,13 @@ if PROJECT_DIR:
 
 
 # ========== 全局配置 ==========
-OBJ_LIST = ['car', 'bus', 'truck']
+OBJ_LIST = ['car', 'bus', 'truck', 'person']
+CLS_NAMES = {
+    'car': '汽车',
+    'bus': '公交',
+    'truck': '卡车',
+    'person': '人员',
+}
 COLORS = {
     'person': (0, 255, 0),
     'car': (255, 0, 0),
@@ -199,10 +205,10 @@ class YOLOTracker:
         self.count_line = None              # ((x1,y1),(x2,y2)) 计数参考线
         self.count_enabled = False
         self.count_data = {
-            'car':   {'in': 0, 'out': 0},
-            'bus':   {'in': 0, 'out': 0},
-            'truck': {'in': 0, 'out': 0},
-            # person 已排除检测
+            'car':    {'in': 0, 'out': 0},
+            'bus':    {'in': 0, 'out': 0},
+            'truck':  {'in': 0, 'out': 0},
+            'person': {'in': 0, 'out': 0},
         }
         self._count_history = {}            # {track_id: {'last_side': 'above'/'below', 'counted': False}}
 
@@ -253,6 +259,7 @@ class YOLOTracker:
         self._count_history.clear()
         self.zone_intrusions.clear()
         self.zone_inside_ids.clear()
+        self._snapshot_logged.clear()
         self.frame_id = 0
 
     # ==================== 监控区间 ====================
@@ -608,23 +615,6 @@ class YOLOTracker:
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, line_color, 2)
         return frame
 
-    def draw_count_stats(self, frame, x=10, y=100, width=220, height=160):
-        """绘制计数统计面板（半透明背景 + 数值）"""
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (x, y), (x + width, y + height), (0, 0, 0), -1)
-        frame = cv2.addWeighted(overlay, 0.5, frame, 0.5, 0)
-        cv2.putText(frame, "=== Count ===", (x + 10, y + 22),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
-        yy = y + 50
-        for cls_name in ['car', 'bus', 'truck']:
-            data = self.count_data.get(cls_name, {'in': 0, 'out': 0})
-            total = data['in'] + data['out']
-            text = f"{cls_name}: IN {data['in']}  OUT {data['out']}  (={total})"
-            cv2.putText(frame, text, (x + 10, yy),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS.get(cls_name, (255,255,255)), 1)
-            yy += 28
-        return frame
-
     # ==================== 敏感区域绘制 ====================
     def set_zone_polygon(self, polygon):
         """设置敏感区域多边形"""
@@ -646,27 +636,18 @@ class YOLOTracker:
     def check_zone_intrusions(self, pred_boxes, frame_id, fps):
         """
         检测敏感区域入侵
-        Returns: (frame, current_inside_ids_set)
+        Returns: set — 当前在区域内的 track_id 集合
         """
         if self.zone_polygon is None:
-            return None, set()
+            return set()
 
         current_inside = set()
 
         for box in pred_boxes:
             x1, y1, x2, y2, lbl, track_id = box
-            # 检查左、中、右三个底点，≥2 点在区内才判定入侵(>1/2车身)
-            left_foot = Point(x=x1, y=y2)
-            center_foot = Point(x=(x1+x2)/2, y=y2)
-            right_foot = Point(x=x2, y=y2)
-            points_inside = sum([
-                isInsidePolygon(left_foot, self.zone_polygon),
-                isInsidePolygon(center_foot, self.zone_polygon),
-                isInsidePolygon(right_foot, self.zone_polygon),
-            ])
-            foot_in = points_inside >= 2
-
-            if foot_in:
+            # 使用边界框中心点判定，中心进入区域才算入侵(>1/2车身)
+            center = Point(x=(x1+x2)/2, y=(y1+y2)/2)
+            if isInsidePolygon(center, self.zone_polygon):
                 current_inside.add(track_id)
                 just_entered = (track_id not in self.zone_inside_ids)
 
@@ -681,8 +662,6 @@ class YOLOTracker:
                 state = self.zone_intrusions[track_id]
                 state['total_frames_inside'] += 1
                 state['label'] = lbl
-
-                duration = state['total_frames_inside'] / fps
 
                 if just_entered:
                     print(f"[区域] {lbl}(ID:{track_id}) 进入敏感区域 (Frame {frame_id})")
@@ -730,7 +709,7 @@ class YOLOTracker:
     def get_count_summary(self):
         """取得计数摘要文字"""
         lines = []
-        for cls_name in ['car', 'bus', 'truck']:
+        for cls_name in ['car', 'bus', 'truck', 'person']:
             d = self.count_data.get(cls_name, {'in': 0, 'out': 0})
             total = d['in'] + d['out']
             if total > 0:

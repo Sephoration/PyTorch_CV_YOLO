@@ -19,18 +19,17 @@ import os
 import cv2
 import numpy as np
 
-from PySide6.QtCore import Qt, QTimer, QThread, Signal, QSize
-from PySide6.QtGui import QImage, QPixmap, QFont, QAction
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QGroupBox, QGridLayout, QFileDialog,
-    QMessageBox, QSlider, QTextEdit, QSplitter, QFrame, QCheckBox,
-    QComboBox
+    QSlider, QTextEdit, QCheckBox
 )
 
 from yolo_tracker_base import (
     YOLOTracker, VIDEOS_DIR, OUTPUT_DIR, PROJECT_ROOT,
-    Point, isInsidePolygon, adaptive_resize
+    Point, isInsidePolygon, adaptive_resize, CLS_NAMES
 )
 
 
@@ -39,7 +38,6 @@ from yolo_tracker_base import (
 # ============================================================
 class VideoThread(QThread):
     change_pixmap = Signal(np.ndarray)
-    update_stats = Signal(dict)
     update_count = Signal(dict)
     update_fps = Signal(float)
     update_zone = Signal(list)
@@ -178,7 +176,7 @@ class VideoThread(QThread):
             self.update_fps.emit(self.tracker.fps_smooth)
             self.update_count.emit({
                 cls: self.tracker.count_data.get(cls, {'in': 0, 'out': 0})
-                for cls in ['car', 'bus', 'truck']
+                for cls in ['car', 'bus', 'truck', 'person']
             })
 
             # 入侵通知
@@ -208,8 +206,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("期末报告 — 目标追踪与分类计数系统")
-        self.setMinimumSize(1100, 600)
-        self.resize(1280, 680)
+        self.setMinimumSize(1050, 650)
+        self.resize(1200, 700)
 
         # 状态
         self.thread = None
@@ -287,10 +285,15 @@ class MainWindow(QMainWindow):
         row_opt = QHBoxLayout()
         row_opt.setSpacing(10)
 
-        self.chk_color = QCheckBox("车辆轨迹")
-        self.chk_color.setChecked(True)
-        self.chk_color.stateChanged.connect(self._on_option_change)
-        row_opt.addWidget(self.chk_color)
+        self.chk_trail = QCheckBox("显示轨迹")
+        self.chk_trail.setChecked(True)
+        self.chk_trail.stateChanged.connect(self._on_option_change)
+        row_opt.addWidget(self.chk_trail)
+
+        self.chk_colorful = QCheckBox("彩色轨迹")
+        self.chk_colorful.setChecked(True)
+        self.chk_colorful.stateChanged.connect(self._on_option_change)
+        row_opt.addWidget(self.chk_colorful)
 
         self.chk_count = QCheckBox("计数线")
         self.chk_count.setChecked(True)
@@ -302,7 +305,7 @@ class MainWindow(QMainWindow):
         self.chk_zone.stateChanged.connect(self._on_option_change)
         row_opt.addWidget(self.chk_zone)
 
-        self.chk_lane = QCheckBox("🔄 变道分析")
+        self.chk_lane = QCheckBox("变道分析")
         self.chk_lane.setChecked(False)
         self.chk_lane.stateChanged.connect(self._on_option_change)
         row_opt.addWidget(self.chk_lane)
@@ -330,9 +333,9 @@ class MainWindow(QMainWindow):
         count_grid.addWidget(QLabel("合计"), 0, 3)
 
         self.count_labels = {}
-        for i, cls_name in enumerate(['car', 'bus', 'truck'], start=1):
+        for i, cls_name in enumerate(['car', 'bus', 'truck', 'person'], start=1):
             self.count_labels[cls_name] = {}
-            count_grid.addWidget(QLabel(f"  {cls_name}"), i, 0)
+            count_grid.addWidget(QLabel(f"  {CLS_NAMES.get(cls_name, cls_name)}"), i, 0)
             lbl_in = QLabel("0")
             lbl_in.setStyleSheet("color: #0f0; font-weight: bold;")
             count_grid.addWidget(lbl_in, i, 1)
@@ -454,8 +457,6 @@ class MainWindow(QMainWindow):
         self.btn_play.setText("⏸ 暂停")
         self.btn_play.setEnabled(True)
         self.btn_stop.setEnabled(True)
-        # 同步参数到线程
-        self._sync_params_to_thread()
         self._run_thread()
 
     def _run_thread(self):
@@ -465,6 +466,11 @@ class MainWindow(QMainWindow):
             self.thread.wait()
 
         self.thread = VideoThread(self.current_video)
+        self.thread.show_zone = self.chk_zone.isChecked()
+        self.thread.show_count = self.chk_count.isChecked()
+        self.thread.show_trail = self.chk_trail.isChecked()
+        self.thread.show_lane_change = self.chk_lane.isChecked()
+        self.thread.colorful_trail = self.chk_colorful.isChecked()
         self.thread.change_pixmap.connect(self._update_image)
         self.thread.update_count.connect(self._update_count_display)
         self.thread.update_fps.connect(lambda v: self.fps_label.setText(f"FPS: {v:.1f}"))
@@ -498,22 +504,21 @@ class MainWindow(QMainWindow):
         self.video_label.setText("请开启影片 (点击下方 [📂开启])")
         self._reset_count_display()
         self.zone_text.setText("等待检测...")
+        self._snap_count = 0
+        self.lbl_snap_count.setText("截图数: 0")
 
     def _on_option_change(self):
         """选项变更时同步到线程"""
         if self.thread and self.thread.tracker:
             self.thread.show_zone = self.chk_zone.isChecked()
             self.thread.show_count = self.chk_count.isChecked()
-            self.thread.show_trail = self.chk_color.isChecked()
+            self.thread.show_trail = self.chk_trail.isChecked()
             self.thread.show_lane_change = self.chk_lane.isChecked()
+            self.thread.colorful_trail = self.chk_colorful.isChecked()
             if self.thread.tracker:
-                self.thread.tracker.colorful_trail = self.chk_color.isChecked()
+                self.thread.tracker.colorful_trail = self.chk_colorful.isChecked()
 
     # ==================== 参数控制 ====================
-    def _sync_params_to_thread(self):
-        """将参数面板的值同步到线程（开始播放前调用）"""
-        pass  # 参数会在 slider 回调中实时同步
-
     def _on_param_conf_changed(self, val):
         v = val / 100.0
         self.lbl_conf_val.setText(f"{v:.2f}")
@@ -536,18 +541,16 @@ class MainWindow(QMainWindow):
 
     def _update_count_display(self, data):
         """更新计数面板"""
-        total_all = 0
-        for cls_name in ['car', 'bus', 'truck']:
+        for cls_name in ['car', 'bus', 'truck', 'person']:
             d = data.get(cls_name, {'in': 0, 'out': 0})
             total = d['in'] + d['out']
-            total_all += total
             if cls_name in self.count_labels:
                 self.count_labels[cls_name]['in'].setText(str(d['in']))
                 self.count_labels[cls_name]['out'].setText(str(d['out']))
                 self.count_labels[cls_name]['total'].setText(str(total))
 
     def _reset_count_display(self):
-        for cls_name in ['car', 'bus', 'truck']:
+        for cls_name in ['car', 'bus', 'truck', 'person']:
             if cls_name in self.count_labels:
                 self.count_labels[cls_name]['in'].setText("0")
                 self.count_labels[cls_name]['out'].setText("0")
