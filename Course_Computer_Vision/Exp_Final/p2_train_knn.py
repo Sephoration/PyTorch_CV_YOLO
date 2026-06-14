@@ -3,6 +3,8 @@ import pickle
 import pandas as pd
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
 from sklearn.model_selection import cross_val_score
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
@@ -34,9 +36,15 @@ def train_and_save(X, y, model_name, algo):
     print(f"样本数：{len(X)}  特征维度：{X.shape[1]}  类别数：{len(y.unique())}")
 
     if algo == "knn":
-        model = KNeighborsClassifier(n_neighbors=5, weights="distance")
+        model = Pipeline([
+            ('scaler', StandardScaler()),
+            ('classifier', KNeighborsClassifier(n_neighbors=5, weights="distance"))
+        ])
     else:
-        model = SVC(kernel="rbf", C=10, gamma="scale", probability=True)
+        model = Pipeline([
+            ('scaler', StandardScaler()),
+            ('classifier', SVC(kernel="rbf", C=10, gamma="scale", probability=True))
+        ])
 
     model.fit(X, y)
 
@@ -54,6 +62,13 @@ def train_and_save(X, y, model_name, algo):
 
     print("\n分类报告：")
     print(classification_report(y, y_pred))
+    labels = sorted(y.unique())
+    cm = confusion_matrix(y, y_pred, labels=labels)
+    header = "     " + "".join(f"{l:>4}" for l in labels)
+    print(f"\n混淆矩阵（行列对应 labels={labels}）：")
+    print(header)
+    for i, row in enumerate(cm):
+        print(f"真{i}  " + "".join(f"{v:4}" for v in row))
 
     return cv_scores.mean()
 

@@ -9,7 +9,7 @@ from p3_gesture_classifier import GestureClassifier
 LOCK_DURATION = 0.9
 SMOOTH_WINDOW = 7
 MIN_CONFIDENCE = 0.15
-FRAME_SKIP = 1
+FRAME_SKIP = 2          # 隔 2 帧检测（每 3 帧一次检测），大幅提升 FPS
 UNLOCK_THRESHOLD = 3   # 连续 N 帧不同手势才解锁，防噪声误断
 
 
@@ -31,21 +31,29 @@ class GestureWorker(QThread):
         tracker = HandTracker(detection_con=self.detection_con)
 
         cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 减少缓冲，降低延迟
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if actual_w < 300:
+            cap.release()
+            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         if not cap.isOpened():
             self.result_ready.emit({"status": "摄像头打开失败"})
             tracker.close()
             return
 
-        # 用训练图（含手）预热跟踪模型，消除首次手部进入卡顿
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        sample_path = os.path.join(BASE_DIR, "train", "0", "0_000.JPG")
-        if os.path.exists(sample_path):
-            sample = cv2.imread(sample_path)
-            if sample is not None:
-                tracker.detect(sample)
+        # 用假图预热跟踪模型，消除首次手部进入卡顿
+        tracker.detect(np.zeros((240, 320, 3), dtype=np.uint8))
 
         # 丢弃前几帧（刚启动时曝光不稳定）
         for _ in range(5):
@@ -59,9 +67,17 @@ class GestureWorker(QThread):
         fps = 0.0
         fc = 0
         last_result = None
+        last_detect_ms = 0.0
+        last_classify_ms = 0.0
+
+        # ---- 性能分析器（每 N 帧打印一次耗时明细）----
+        PROFILER_INTERVAL = 30
+        prof = {"read": 0.0, "detect": 0.0, "classify": 0.0, "draw": 0.0, "count": 0}
 
         while self._running:
+            t0 = time.time()
             ret, frame = cap.read()
+            t1 = time.time()
             if not ret:
                 self.msleep(5)
                 continue
@@ -77,13 +93,22 @@ class GestureWorker(QThread):
                 fc = 0
                 fps_time = now
 
+            prof["read"] += t1 - t0
             # ---- 检测（隔帧）----
             if fc % (FRAME_SKIP + 1) == 0:
+                t2 = time.time()
                 tracker.detect(frame)
+
+                t3 = time.time()
+                last_detect_ms = round((t3 - t2) * 1000, 1)
+                prof["detect"] += t3 - t2
 
                 if tracker.results and tracker.results.hand_landmarks:
                     hand_lms = tracker.results.hand_landmarks[0]
                     pred, proba = classifier.predict(hand_lms)
+                    t4 = time.time()
+                    last_classify_ms = round((t4 - t3) * 1000, 1)
+                    prof["classify"] += t4 - t3
 
                     if pred is not None and proba is not None:
                         top_conf = float(np.max(proba))
@@ -199,10 +224,16 @@ class GestureWorker(QThread):
             # ---- FPS + 模型（左上 / 右上）----
             cv2.putText(frame, f"{fps:.0f} FPS", (8, 28),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1)
-            model_text = classifier.current.upper()
+            model_text = classifier.meta[classifier.current]["display"] if (classifier.current and classifier.current in classifier.meta) else "N/A"
             (tw, th), _ = cv2.getTextSize(model_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             cv2.putText(frame, model_text, (w - tw - 10, 22),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1)
+
+            prof["draw"] += time.time() - t1
+            prof["count"] += 1
+            if prof["count"] >= PROFILER_INTERVAL:
+                prof["read"] = prof["detect"] = prof["classify"] = prof["draw"] = 0.0
+                prof["count"] = 0
 
             self.frame_ready.emit(frame)
             if res:
@@ -212,12 +243,14 @@ class GestureWorker(QThread):
                     "confidence": res.get("confidence", 0.0),
                     "proba": res["proba"].tolist() if res.get("proba") is not None else None,
                     "model": classifier.current, "fps": round(fps, 1),
+                    "detect_ms": last_detect_ms, "classify_ms": last_classify_ms,
                 })
             else:
                 self.result_ready.emit({
                     "pred": None, "locked": False, "lock_progress": 0.0,
                     "confidence": 0.0, "proba": None,
                     "model": classifier.current, "fps": round(fps, 1),
+                    "detect_ms": last_detect_ms, "classify_ms": last_classify_ms,
                 })
 
         cap.release()

@@ -35,6 +35,9 @@ class HandTracker:
         rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         ts = int(time.time() * 1000)
+        if hasattr(self, '_last_ts') and ts <= self._last_ts:
+            ts = self._last_ts + 1
+        self._last_ts = ts
         self.results = self.detector.detect_for_video(mp_img, ts)
         self._input_w, self._input_h = display_frame.shape[1], display_frame.shape[0]
         return self.results
