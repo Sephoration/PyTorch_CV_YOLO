@@ -128,6 +128,33 @@ input_save       = lambda: _hotkey(VK_CONTROL, 0x53)          # Ctrl+S
 input_find       = lambda: _hotkey(VK_CONTROL, 0x46)          # Ctrl+F
 input_ime_switch = lambda: _hotkey_ext(VK_LWIN, VK_SPACE)     # Win+Space
 
+# 鼠标控制
+MOUSEEVENTF_LEFTDOWN  = 0x0002
+MOUSEEVENTF_LEFTUP    = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP   = 0x0010
+
+def _mouse_left_click():
+    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    time.sleep(0.02)
+    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+def _mouse_right_click():
+    user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+    time.sleep(0.02)
+    user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+
+def _mouse_double_click():
+    _mouse_left_click()
+    time.sleep(0.05)
+    _mouse_left_click()
+
+mouse_left   = _mouse_left_click
+mouse_right  = _mouse_right_click
+mouse_double = _mouse_double_click
+mouse_scroll_up   = lambda: user32.mouse_event(0x0800, 0, 0, 120, 0)   # 滚轮上
+mouse_scroll_down = lambda: user32.mouse_event(0x0800, 0, 0, -120, 0)  # 滚轮下
+
 
 # ====================================================================
 # 功能映射
@@ -179,6 +206,13 @@ ACTION_MAP = {
         3: ("保存", input_save),
         4: ("查找", input_find),
         5: ("切换输入法", input_ime_switch),
+    },
+    8: {  # 鼠标控制
+        1: ("左键点击", mouse_left),
+        2: ("右键点击", mouse_right),
+        3: ("双击", mouse_double),
+        4: ("滚轮上滚", mouse_scroll_up),
+        5: ("滚轮下滚", mouse_scroll_down),
     },
 }
 

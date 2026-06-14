@@ -1,6 +1,6 @@
 # main.py
 """手势识别控制系统 — 两级手势：首页选功能 → 功能内子手势 → 0 回首页"""
-import sys, numpy as np
+import sys, time, numpy as np
 from PySide6.QtCore import Qt, Slot, QPoint
 from PySide6.QtGui import QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -8,9 +8,11 @@ from PySide6.QtWidgets import (
     QLabel, QGroupBox, QComboBox, QProgressBar, QCheckBox,
     QFrame,
 )
-from gesture_classifier import GestureClassifier
-from gesture_worker import GestureWorker
-from actions import ACTION_MAP, execute as execute_action
+from p3_gesture_classifier import GestureClassifier
+from p3_gesture_worker import GestureWorker
+from p3_actions import ACTION_MAP, execute as execute_action
+
+ACTION_COOLDOWN = 1.0   # 触发动作后冷却秒数，防重复触发
 
 # 功能名称+描述（子手势定义在 actions.ACTION_MAP 里）
 FUNC_INFO = {
@@ -21,6 +23,7 @@ FUNC_INFO = {
     5: ("系统控制", "锁屏/截图等"),
     6: ("文件操作", "新建/复制/粘贴/删除/重命名"),
     7: ("输入辅助", "全选/撤销/保存/查找/切换输入法"),
+    8: ("鼠标控制", "左/右键/双击/滚轮"),
 }
 
 FUNCTIONS = {
@@ -42,43 +45,46 @@ class OverlayWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setFixedWidth(200)
+        self.setFixedWidth(150)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # 内容容器
+        # 内容容器 — 浅色卡片，跟 Fusion 主题一致
         self.container = QWidget()
         self.container.setStyleSheet(
-            "background: rgba(20,20,30,220); border: 1px solid rgba(0,200,160,100); "
-            "border-radius: 8px; padding: 6px 8px;"
+            "background: rgba(255,255,255,235); "
+            "border: 1px solid #ccc; "
+            "border-radius: 6px;"
         )
         cl = QVBoxLayout(self.container)
+        cl.setContentsMargins(8, 5, 8, 5)
         cl.setSpacing(2)
 
-        # 1. 手势锁定状态（最顶，演示显眼）
+        # 1. 锁定进度行
         self.lock_status = QLabel("")
-        self.lock_status.setStyleSheet("color: #ffcc00; font-size: 11px; border: none; background: transparent; font-weight: bold;")
+        self.lock_status.setStyleSheet(
+            "color: #cc8800; font-size: 10px; border: none; background: transparent;")
         self.lock_status.setWordWrap(True)
         cl.addWidget(self.lock_status)
 
         # 2. 功能标题
         self.mode_label = QLabel("首页")
-        self.mode_label.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
-        self.mode_label.setStyleSheet("color: #00c8a0; border: none; background: transparent;")
+        self.mode_label.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
+        self.mode_label.setStyleSheet("color: #008866; border: none; background: transparent;")
         cl.addWidget(self.mode_label)
 
-        # 状态描述
+        # 3. 状态描述
         self.status_label = QLabel("等待手势...")
-        self.status_label.setStyleSheet("color: #ccc; font-size: 11px; border: none; background: transparent;")
+        self.status_label.setStyleSheet(
+            "color: #666; font-size: 9px; border: none; background: transparent;")
         self.status_label.setWordWrap(True)
         cl.addWidget(self.status_label)
 
-        # 3. 手势操作表
+        # 4. 可选操作列表
         self.gesture_list = QLabel("")
         self.gesture_list.setStyleSheet(
-            "color: #aaa; font-size: 10px; border: none; background: transparent;"
-        )
+            "color: #888; font-size: 9px; border: none; background: transparent;")
         self.gesture_list.setWordWrap(True)
         cl.addWidget(self.gesture_list)
 
@@ -87,12 +93,11 @@ class OverlayWindow(QWidget):
 
     def set_home(self):
         self.mode_label.setText("首页")
-        self.status_label.setText("选择功能")
+        self.status_label.setText("手势 1-8 进入功能")
         self.lock_status.setText("")
         tips = ""
         for gid, fdef in FUNCTIONS.items():
             tips += f"{gid} {fdef['name']}\n"
-        tips += "0 主菜单"
         self.gesture_list.setText(tips.strip())
         self.adjustSize()
 
@@ -105,8 +110,7 @@ class OverlayWindow(QWidget):
         self.lock_status.setText("")
         tips = ""
         for sgid, pair in fdef["sub"].items():
-            sname = pair[0]
-            tips += f"{sgid} {sname}\n"
+            tips += f"{sgid} {pair[0]}\n"
         tips += "0 返回主菜单"
         self.gesture_list.setText(tips.strip())
         self.adjustSize()
@@ -116,21 +120,19 @@ class OverlayWindow(QWidget):
         self.adjustSize()
 
     def set_lock_status(self, pred, lock_progress, locked):
-        """更新锁定状态行（演示时显示当前手势和进度）"""
+        """更新锁定状态行"""
         if locked:
             self.lock_status.setText(f"✓ 手势 {pred} 已触发")
             self.lock_status.setStyleSheet(
-                "color: #00ff88; font-size: 11px; border: none; background: transparent; font-weight: bold;")
+                "color: #008844; font-size: 10px; border: none; background: transparent; font-weight: bold;")
         elif lock_progress > 0:
-            blocks = int(lock_progress * 8)
-            bar = "█" * blocks + "░" * (8 - blocks)
-            self.lock_status.setText(f"手势 {pred}  {bar} {int(lock_progress*100)}%")
+            self.lock_status.setText(f"手势 {pred} 锁定中 {int(lock_progress*100)}%")
             self.lock_status.setStyleSheet(
-                "color: #ffcc00; font-size: 11px; border: none; background: transparent; font-weight: bold;")
+                "color: #cc8800; font-size: 10px; border: none; background: transparent; font-weight: bold;")
         elif pred is not None:
             self.lock_status.setText(f"手势 {pred}")
             self.lock_status.setStyleSheet(
-                "color: #aaa; font-size: 11px; border: none; background: transparent;")
+                "color: #666; font-size: 10px; border: none; background: transparent;")
         else:
             self.lock_status.setText("")
         self.adjustSize()
@@ -153,6 +155,7 @@ class MainWindow(QMainWindow):
         self.state = "home"       # "home" | "function"
         self.current_func = None  # 当前功能编号
         self._last_locked = None  # 上一次锁定的手势（防重复触发）
+        self._last_action_time = 0.0  # 上一次动作执行时间（配合冷却）
 
         self._init_ui()
         self._init_overlay()
@@ -247,7 +250,7 @@ class MainWindow(QMainWindow):
         self.conf_pct.setStyleSheet("color: #555;")
         num_row.addWidget(self.conf_pct)
         rg.addLayout(num_row)
-        right.addWidget(recog_group)
+        right.addWidget(recog_group, stretch=1)
 
         # ── 2. 状态与操作 ──
         state_group = QGroupBox("状态与操作")
@@ -260,6 +263,10 @@ class MainWindow(QMainWindow):
         self.state_title.setStyleSheet("color: #00c8a0;")
         sg.addWidget(self.state_title)
 
+        self.state_desc = QLabel("选择功能")
+        self.state_desc.setStyleSheet("color: #888; font-size: 10px;")
+        sg.addWidget(self.state_desc)
+
         # 分隔线
         sep_line = QFrame()
         sep_line.setFrameShape(QFrame.HLine)
@@ -269,12 +276,12 @@ class MainWindow(QMainWindow):
         self.action_list = QLabel("")
         self.action_list.setStyleSheet("font-size: 11px;")
         self.action_list.setWordWrap(True)
-        sg.addWidget(self.action_list, stretch=1)
+        sg.addWidget(self.action_list)
 
         self.back_hint = QLabel("")
         self.back_hint.setStyleSheet("color: #ff8844; font-size: 10px;")
         sg.addWidget(self.back_hint)
-        right.addWidget(state_group, stretch=1)
+        right.addWidget(state_group, stretch=2)
 
         # ── 3. 设置 ──
         settings_group = QGroupBox("设置")
@@ -296,7 +303,7 @@ class MainWindow(QMainWindow):
         self.chk_lockbar.setChecked(True)
         self.chk_lockbar.stateChanged.connect(self._on_opt)
         sl.addWidget(self.chk_lockbar)
-        right.addWidget(settings_group)
+        right.addWidget(settings_group, stretch=1)
 
         right_widget = QWidget()
         right_widget.setLayout(right)
@@ -312,6 +319,7 @@ class MainWindow(QMainWindow):
         """根据当前状态更新状态功能卡"""
         if self.state == "home":
             self.state_title.setText("首页")
+            self.state_desc.setText("选择一个功能进入")
             tips = ""
             for gid, fdef in FUNCTIONS.items():
                 tips += f"{gid}    {fdef['name']}\n"
@@ -321,6 +329,7 @@ class MainWindow(QMainWindow):
             fdef = FUNCTIONS.get(self.current_func)
             if fdef:
                 self.state_title.setText(fdef['name'])
+                self.state_desc.setText(fdef['desc'])
                 tips = ""
                 for sgid, pair in fdef["sub"].items():
                     tips += f"{sgid}    {pair[0]}\n"
@@ -329,7 +338,7 @@ class MainWindow(QMainWindow):
 
     # ==================================================================
     def _start(self):
-        self.worker = GestureWorker()
+        self.worker = GestureWorker(classifier=self.classifier)
         self.worker.frame_ready.connect(self._on_frame)
         self.worker.result_ready.connect(self._on_result)
         self.worker.start()
@@ -390,10 +399,13 @@ class MainWindow(QMainWindow):
         # ---- 更新悬浮窗锁定状态 ----
         self.overlay.set_lock_status(pred, lock_progress, locked)
 
-        # ---- 锁定触发 ----
+        # ---- 锁定触发（含冷却期）----
         if locked and pred is not None and pred != self._last_locked:
-            self._last_locked = pred
-            self._handle_gesture(pred)
+            now = time.time()
+            if now - self._last_action_time >= ACTION_COOLDOWN:
+                self._last_action_time = now
+                self._last_locked = pred
+                self._handle_gesture(pred)
         elif not locked:
             self._last_locked = None
 
@@ -423,6 +435,7 @@ class MainWindow(QMainWindow):
 
     def _on_model(self, name):
         self.classifier.switch(name.lower())
+        self.status_label.setText(f"模型: {name}")
 
     def _on_opt(self):
         if self.worker:
