@@ -1,6 +1,6 @@
 # gui.py
 """GUI：悬浮状态窗 + 主窗口"""
-import time, numpy as np
+import time, threading, numpy as np
 from PySide6.QtCore import Qt, Slot, QPoint
 from PySide6.QtGui import QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -381,12 +381,16 @@ class MainWindow(QMainWindow):
         self.worker.frame_ready.connect(self._on_frame)
         self.worker.result_ready.connect(self._on_result)
         self.worker.start()
+        # 后台预加载全部模型，切换零等待
+        threading.Thread(target=self.classifier.preload_all, daemon=True).start()
 
     def _stop(self):
         if hasattr(self, 'worker') and self.worker:
             self.worker._running = False
             self.worker.quit()
-            self.worker.wait(3000)
+            if not self.worker.wait(3000):
+                self.worker.terminate()
+                self.worker.wait()
             self.worker = None
         self.video_label.clear()
         self.video_label.setText("摄像头已关闭")

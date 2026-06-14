@@ -11,6 +11,7 @@ SMOOTH_WINDOW = 7
 MIN_CONFIDENCE = 0.15
 FRAME_SKIP = 2          # 隔 2 帧检测（每 3 帧一次检测），大幅提升 FPS
 UNLOCK_THRESHOLD = 3   # 连续 N 帧不同手势才解锁，防噪声误断
+HAND_HOLD = 0.3        # 手消失后锁定进度保持时间（秒）
 
 
 class GestureWorker(QThread):
@@ -28,35 +29,41 @@ class GestureWorker(QThread):
     def run(self):
         self._running = True
         classifier = self.classifier or GestureClassifier()
-        tracker = HandTracker(detection_con=self.detection_con)
 
+        # 先开摄像头（快），再加载模型（慢），摄像头灯先亮
         cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         cap.set(cv2.CAP_PROP_FPS, 30)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 0)      # 最小缓冲，降低延迟
         actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         if actual_w < 300:
             cap.release()
             cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
             cap.set(cv2.CAP_PROP_FPS, 30)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 0)
         if not cap.isOpened():
             self.result_ready.emit({"status": "摄像头打开失败"})
-            tracker.close()
             return
 
-        # 用假图预热跟踪模型，消除首次手部进入卡顿
-        tracker.detect(np.zeros((240, 320, 3), dtype=np.uint8))
+        tracker = HandTracker(detection_con=self.detection_con)
+
+        # 用假图预热跟踪模型 + 分类器，消除首次手部进入卡顿
+        blank = np.zeros((240, 320, 3), dtype=np.uint8)
+        for _ in range(5):
+            tracker.detect(blank)
+        # 预热分类器：生成虚拟 MediaPipe landmark 对象
+        try:
+            dummy = type('LM', (), {'x': 0.5, 'y': 0.5, 'z': 0.0})()
+            classifier.predict([dummy] * 21)
+        except Exception:
+            pass
 
         # 丢弃前几帧（刚启动时曝光不稳定）
-        for _ in range(5):
+        for _ in range(2):
             cap.read()
 
         pred_history = deque(maxlen=SMOOTH_WINDOW)
@@ -69,6 +76,9 @@ class GestureWorker(QThread):
         last_result = None
         last_detect_ms = 0.0
         last_classify_ms = 0.0
+        last_hand_time = 0.0
+        held_result = None
+        held_lock_progress = 0.0
 
         # ---- 性能分析器（每 N 帧打印一次耗时明细）----
         PROFILER_INTERVAL = 30
@@ -82,7 +92,6 @@ class GestureWorker(QThread):
                 self.msleep(5)
                 continue
 
-            frame = cv2.flip(frame, 1)
             h, w = frame.shape[:2]
             fc += 1
             now = time.time()
@@ -163,12 +172,18 @@ class GestureWorker(QThread):
             # ---- 每帧计算锁定进度（让进度条动画平滑）----
             if last_result and last_result.get("pred") is not None:
                 res = last_result
+                last_hand_time = now
                 if res.get("locked"):
                     lock_progress = 1.0
                 elif res.get("lock_start", 0) > 0:
                     lock_progress = min(1.0, (now - res["lock_start"]) / LOCK_DURATION)
                 else:
                     lock_progress = 0.0
+                held_result = res
+                held_lock_progress = lock_progress
+            elif now - last_hand_time < HAND_HOLD:
+                res = held_result
+                lock_progress = held_lock_progress
             else:
                 res = None
                 lock_progress = 0.0
@@ -176,6 +191,9 @@ class GestureWorker(QThread):
             # ---- 绘制骨架 ----
             if self.show_skeleton:
                 frame = tracker.draw(frame)
+
+            # ---- 翻转为镜像显示（检测用原始帧，用户看镜像）----
+            show = cv2.flip(frame, 1)
 
             # ---- 底部进度条（含数字标识）----
             if self.show_lock_bar:
@@ -186,15 +204,15 @@ class GestureWorker(QThread):
 
                 if res and lock_progress > 0 and not res.get("locked"):
                     # 进度条背景
-                    cv2.rectangle(frame, (bar_x, bar_y),
+                    cv2.rectangle(show, (bar_x, bar_y),
                                   (bar_x + bar_w, bar_y + bar_h), (60, 60, 60), -1)
                     # 进度填充
                     fill_w = int((bar_w - 4) * lock_progress)
-                    cv2.rectangle(frame, (bar_x + 2, bar_y + 2),
+                    cv2.rectangle(show, (bar_x + 2, bar_y + 2),
                                   (bar_x + 2 + fill_w, bar_y + bar_h - 2),
                                   (0, 220, 220), -1)
                     # 边框
-                    cv2.rectangle(frame, (bar_x, bar_y),
+                    cv2.rectangle(show, (bar_x, bar_y),
                                   (bar_x + bar_w, bar_y + bar_h), (150, 150, 150), 2)
 
                     # 进度条左边显示当前预测数字
@@ -202,31 +220,31 @@ class GestureWorker(QThread):
                     if cur is not None:
                         num_x = bar_x - 35
                         num_y = bar_y + bar_h // 2 + 8
-                        cv2.putText(frame, str(cur), (num_x, num_y),
+                        cv2.putText(show, str(cur), (num_x, num_y),
                                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 220, 220), 3)
 
                 elif res and res.get("locked"):
                     # 已锁定：绿色满条 + 数字
-                    cv2.rectangle(frame, (bar_x, bar_y),
+                    cv2.rectangle(show, (bar_x, bar_y),
                                   (bar_x + bar_w, bar_y + bar_h), (0, 80, 0), -1)
-                    cv2.rectangle(frame, (bar_x + 2, bar_y + 2),
+                    cv2.rectangle(show, (bar_x + 2, bar_y + 2),
                                   (bar_x + bar_w - 2, bar_y + bar_h - 2),
                                   (0, 255, 0), -1)
-                    cv2.rectangle(frame, (bar_x, bar_y),
+                    cv2.rectangle(show, (bar_x, bar_y),
                                   (bar_x + bar_w, bar_y + bar_h), (0, 255, 0), 2)
 
                     if res["pred"] is not None:
                         num_x = bar_x - 35
                         num_y = bar_y + bar_h // 2 + 8
-                        cv2.putText(frame, str(res["pred"]), (num_x, num_y),
+                        cv2.putText(show, str(res["pred"]), (num_x, num_y),
                                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
 
             # ---- FPS + 模型（左上 / 右上）----
-            cv2.putText(frame, f"{fps:.0f} FPS", (8, 28),
+            cv2.putText(show, f"{fps:.0f} FPS", (8, 28),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1)
             model_text = classifier.meta[classifier.current]["display"] if (classifier.current and classifier.current in classifier.meta) else "N/A"
             (tw, th), _ = cv2.getTextSize(model_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.putText(frame, model_text, (w - tw - 10, 22),
+            cv2.putText(show, model_text, (w - tw - 10, 22),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 1)
 
             prof["draw"] += time.time() - t1
@@ -235,7 +253,7 @@ class GestureWorker(QThread):
                 prof["read"] = prof["detect"] = prof["classify"] = prof["draw"] = 0.0
                 prof["count"] = 0
 
-            self.frame_ready.emit(frame)
+            self.frame_ready.emit(show)
             if res:
                 self.result_ready.emit({
                     "pred": res["pred"], "locked": res.get("locked", False),

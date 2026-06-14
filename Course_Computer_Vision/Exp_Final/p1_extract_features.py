@@ -27,6 +27,12 @@ def create_csv_header():
         header.extend([f"x{i}", f"y{i}", f"z{i}"])
     return header
 
+def create_csv_header_2d():
+    header = ["class_name", "file_name"]
+    for i in range(21):
+        header.extend([f"x{i}", f"y{i}"])
+    return header
+
 
 def normalize_landmarks_raw(landmarks):
     """原始归一化：相对手腕，按手尺度缩放——相机坐标系"""
@@ -62,10 +68,9 @@ def normalize_landmarks_hand(landmarks):
     for lm in landmarks:
         rx = lm.x - wrist.x
         ry = lm.y - wrist.y
-        rz = lm.z - wrist.z
         x_rot = cos_a * rx - sin_a * ry
         y_rot = sin_a * rx + cos_a * ry
-        row.extend([x_rot / scale, y_rot / scale, rz / scale])
+        row.extend([x_rot / scale, y_rot / scale])
     return row
 
 
@@ -149,7 +154,7 @@ if __name__ == '__main__':
     writer_hand = csv.writer(f_hand)
     writer_hand_v2 = csv.writer(f_hand_v2)
     writer_raw.writerow(create_csv_header())
-    writer_hand.writerow(create_csv_header())
+    writer_hand.writerow(create_csv_header_2d())
     writer_hand_v2.writerow(create_csv_header())
 
     try:

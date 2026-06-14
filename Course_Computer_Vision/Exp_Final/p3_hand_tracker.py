@@ -23,8 +23,6 @@ class HandTracker:
         self.detector = mp.tasks.vision.HandLandmarker.create_from_options(opts)
         self.connections = mp.tasks.vision.HandLandmarksConnections.HAND_CONNECTIONS
         self.results = None
-        self._input_w = DETECT_W
-        self._input_h = DETECT_H
 
     def detect(self, display_frame):
         """检测手部。内部缩放到 320×240 做推理，返回归一化坐标的 results。
@@ -39,7 +37,6 @@ class HandTracker:
             ts = self._last_ts + 1
         self._last_ts = ts
         self.results = self.detector.detect_for_video(mp_img, ts)
-        self._input_w, self._input_h = display_frame.shape[1], display_frame.shape[0]
         return self.results
 
     def draw(self, frame):

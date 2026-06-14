@@ -1,6 +1,6 @@
 # gesture_classifier.py
 """通用手势分类器 — 动态扫描 models/ 目录加载 .pkl 模型"""
-import os, pickle, numpy as np
+import os, pickle, threading, numpy as np
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
@@ -28,9 +28,23 @@ class GestureClassifier:
         self.models = {}
         self.meta = {}  # key → {filename, feature_mode, display}
         self.current = None
+        self._lock = threading.Lock()
         self._scan_models()
         if self.available:
             self.current = self.available[0]
+            self._load(self.current)  # 加载默认模型
+
+    def _normalize(self, landmarks, mode):
+        if mode == "hand":
+            return self._normalize_hand(landmarks)
+        if mode == "hand_v2":
+            return self._normalize_hand_v2(landmarks)
+        return self._normalize_raw(landmarks)
+
+    def preload_all(self):
+        """后台预加载所有未加载的模型，切换时零等待"""
+        for key in self.meta:
+            self._load(key)
 
     def _scan_models(self):
         if not os.path.exists(MODEL_DIR):
@@ -44,15 +58,24 @@ class GestureClassifier:
                 "feature_mode": _infer_feature_mode(fn),
                 "display": _display_name(key),
             }
-            path = os.path.join(MODEL_DIR, fn)
-            with open(path, "rb") as f:
-                model = pickle.load(f)
-            if hasattr(model, "feature_names_in_"):
-                try:
-                    del model.feature_names_in_
-                except AttributeError:
-                    pass
-            self.models[key] = model
+
+    def _load(self, key):
+        """延迟加载单个模型，仅首次调用时读取文件"""
+        if key in self.models:
+            return self.models[key]
+        info = self.meta.get(key)
+        if not info:
+            return None
+        path = os.path.join(MODEL_DIR, info["filename"])
+        with open(path, "rb") as f:
+            model = pickle.load(f)
+        if hasattr(model, "feature_names_in_"):
+            try:
+                del model.feature_names_in_
+            except AttributeError:
+                pass
+        self.models[key] = model
+        return model
 
     # ==================================================================
     # 归一化（不变）
@@ -80,11 +103,11 @@ class GestureClassifier:
         angle = np.arctan2(dy, dx)
         rot = -np.pi / 2 - angle
         cos_a, sin_a = np.cos(rot), np.sin(rot)
-        pts = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
-        rel = pts - np.array([wrist.x, wrist.y, wrist.z])
+        pts = np.array([[lm.x, lm.y] for lm in landmarks])
+        rel = pts - np.array([wrist.x, wrist.y])
         x_rot = cos_a * rel[:, 0] - sin_a * rel[:, 1]
         y_rot = sin_a * rel[:, 0] + cos_a * rel[:, 1]
-        out = np.column_stack([x_rot / scale, y_rot / scale, rel[:, 2] / scale])
+        out = np.column_stack([x_rot / scale, y_rot / scale])
         return out.reshape(1, -1)
 
     @staticmethod
@@ -114,26 +137,27 @@ class GestureClassifier:
 
     def normalize(self, landmarks):
         mode = self.meta[self.current]["feature_mode"]
-        if mode == "hand":
-            return self._normalize_hand(landmarks)
-        if mode == "hand_v2":
-            return self._normalize_hand_v2(landmarks)
-        return self._normalize_raw(landmarks)
+        return self._normalize(landmarks, mode)
 
     def predict(self, landmarks):
-        if self.current is None:
-            return None, None
-        model = self.models.get(self.current)
-        if model is None:
-            return None, None
-        feats = self.normalize(landmarks)
+        with self._lock:
+            cur = self.current
+            if cur is None:
+                return None, None
+            model = self._load(cur)
+            if model is None:
+                return None, None
+            mode = self.meta[cur]["feature_mode"]
+        feats = self._normalize(landmarks, mode)
         pred = model.predict(feats)[0]
         proba = model.predict_proba(feats)[0] if hasattr(model, "predict_proba") else None
         return int(pred), proba
 
     def switch(self, name):
-        if name in self.models:
-            self.current = name
+        with self._lock:
+            if name in self.meta:
+                self.current = name
+                self._load(name)  # 预加载，避免 Worker 首次预测卡顿
 
     @property
     def available(self):

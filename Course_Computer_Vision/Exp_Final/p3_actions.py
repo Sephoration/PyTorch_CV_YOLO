@@ -12,6 +12,7 @@ user32 = ctypes.windll.user32
 VK_LEFT = 0x25;    VK_RIGHT = 0x27;   VK_UP = 0x26;    VK_DOWN = 0x28
 VK_SPACE = 0x20;   VK_RETURN = 0x0D;  VK_ESCAPE = 0x1B; VK_TAB = 0x09
 VK_F5 = 0x74;      VK_F2 = 0x71;      VK_DELETE = 0x2E
+VK_PRIOR = 0x21;   VK_NEXT = 0x22                              # PageUp / PageDown
 VK_MENU = 0x12                                                       # Alt
 VK_CONTROL = 0x11; VK_LWIN = 0x5B;    VK_LSHIFT = 0xA0
 VK_VOLUME_UP = 0xAF;   VK_VOLUME_DOWN = 0xAE
@@ -102,8 +103,8 @@ win_snap_left  = lambda: _hotkey_ext(VK_LWIN, VK_LEFT)
 win_snap_right = lambda: _hotkey_ext(VK_LWIN, VK_RIGHT)
 
 # 浏览器
-web_scroll_down = lambda: _hotkey(VK_CONTROL, VK_DOWN)   # 近似
-web_scroll_up   = lambda: _hotkey(VK_CONTROL, VK_UP)
+web_scroll_down = lambda: _press(VK_NEXT)                 # PageDown
+web_scroll_up   = lambda: _press(VK_PRIOR)                # PageUp
 web_new_tab     = lambda: _hotkey(VK_CONTROL, 0x54)      # Ctrl+T
 web_close_tab   = lambda: _hotkey(VK_CONTROL, 0x57)      # Ctrl+W
 web_refresh     = lambda: _press(VK_F5)
