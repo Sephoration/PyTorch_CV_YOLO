@@ -15,14 +15,14 @@ from p3_actions import ACTION_MAP, execute as execute_action
 ACTION_COOLDOWN = 1.0
 
 FUNC_INFO = {
-    1: ("PPT 控制", "幻灯片翻页"),
-    2: ("媒体播放", "音乐/视频播放"),
-    3: ("窗口管理", "窗口切换控制"),
-    4: ("网页浏览", "浏览器控制"),
-    5: ("系统控制", "锁屏/截图等"),
-    6: ("文件操作", "新建/复制/粘贴/删除/重命名"),
-    7: ("输入辅助", "全选/撤销/保存/查找/切换输入法"),
-    8: ("鼠标控制", "左/右键/双击/滚轮"),
+    1: ("PPT 控制", "翻页/放映控制"),
+    2: ("媒体播放", "播放/音量控制"),
+    3: ("窗口管理", "窗口排列与切换"),
+    4: ("网页浏览", "标签页/导航/书签"),
+    5: ("系统工具", "截图/搜索/运行/设置"),
+    6: ("文件操作", "复制/粘贴/删除/重命名"),
+    7: ("文本编辑", "全选/撤销/保存/查找"),
+    8: ("应用启动器", "快速打开常用程序"),
 }
 
 FUNCTIONS = {
@@ -416,6 +416,16 @@ class MainWindow(QMainWindow):
 
     @Slot(dict)
     def _on_result(self, data):
+        # ---- 摄像头状态/错误信息 ----
+        status = data.get("status")
+        if status:
+            self.video_label.setText(status)
+            self.gesture_num.setText("-")
+            self.conf_pct.setText("--")
+            self.lock_bar.setValue(0)
+            self.lock_bar.setFormat("")
+            return
+
         pred = data.get("pred")
         locked = data.get("locked", False)
         lock_progress = data.get("lock_progress", 0.0)

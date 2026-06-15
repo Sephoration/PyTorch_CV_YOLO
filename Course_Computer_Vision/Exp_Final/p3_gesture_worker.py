@@ -84,13 +84,18 @@ class GestureWorker(QThread):
         PROFILER_INTERVAL = 30
         prof = {"read": 0.0, "detect": 0.0, "classify": 0.0, "draw": 0.0, "count": 0}
 
+        camera_lost = False
         while self._running:
             t0 = time.time()
             ret, frame = cap.read()
             t1 = time.time()
             if not ret:
+                if not camera_lost:
+                    camera_lost = True
+                    self.result_ready.emit({"status": "未找到摄像头"})
                 self.msleep(5)
                 continue
+            camera_lost = False
 
             h, w = frame.shape[:2]
             fc += 1

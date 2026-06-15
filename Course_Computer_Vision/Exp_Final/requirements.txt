@@ -1,0 +1,8 @@
+mediapipe
+opencv-python
+PySide6
+scikit-learn
+pandas
+numpy
+pycaw
+comtypes
