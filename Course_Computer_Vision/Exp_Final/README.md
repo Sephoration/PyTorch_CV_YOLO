@@ -1,61 +1,59 @@
-# 手势识别控制系统 — 期末项目
+# 手势识别控制系统
 
-**粤台产业科技学院 · 计算机视觉课程**
-
-基于 MediaPipe 手部 21 关键点 + KNN/SVM 分类器的实时手势识别控制系统，通过 Windows API 模拟键盘/鼠标输入实现对电脑的隔空操控。
+基于 MediaPipe 21 点手部关键点 + KNN/SVM 分类器的实时手势识别控制系统，通过 Windows API 模拟键盘/鼠标输入，实现对电脑的隔空操控。
 
 ---
 
-## 项目结构
+## 快速开始
+
+```powershell
+# 安装依赖
+pip install PySide6 mediapipe opencv-python numpy scikit-learn pandas
+
+# 启动 GUI
+python p4_main.py
+```
+
+默认使用 `KNN_HAND` 模型（字母序第一个），右侧面板下拉框可切换模型。
+
+如需从训练图片重新训练模型：
+
+```powershell
+python p1_extract_features.py    # 提取特征 → csv/
+python p2_train_knn.py           # 训练模型 → models/
+```
+
+---
+
+## 文件结构
 
 ```
 Exp_Final/
-├── main.py                  # PySide6 GUI 主界面
-├── gesture_worker.py        # QThread 摄像头线程（检测 + 分类 + 锁定逻辑）
-├── hand_tracker.py          # MediaPipe 手部关键点检测器（320×240 推理）
-├── gesture_classifier.py    # KNN/SVM 分类器（双特征模式）
-├── actions.py               # Windows 系统操作（键盘/鼠标模拟）
-├── extract_features.py      # 从训练图片提取特征 → CSV（训练用）
-├── train_knn.py             # 训练 KNN/SVM 模型（训练用）
-├── train/                   # 训练图片（0-8 共 9 类，每类 ~124 张）
-│   ├── 0/  (124 JPG)
-│   ├── 1/  (124 JPG)
-│   ├── ...
-│   └── 8/  (124 JPG)
-├── csv/
-│   ├── hand_gesture_data.csv       # 原始特征（相机坐标系）
-│   └── hand_gesture_data_hand.csv  # 旋转不变特征（手掌坐标系）
-├── models/
-│   ├── hand_landmarker.task        # MediaPipe 手部模型（7.46 MB）
-│   ├── hand_gesture_knn.pkl        # KNN（原始坐标）
-│   ├── hand_gesture_svm.pkl        # SVM（原始坐标）
-│   ├── hand_gesture_knn_hand.pkl   # KNN（手掌坐标系）
-│   └── hand_gesture_svm_hand.pkl   # SVM（手掌坐标系）
-└── README.md                # 本文件
+├── p4_main.py                 # 入口（仅 16 行）
+├── p3_gui.py                  # GUI 界面（PySide6）
+├── p3_gesture_worker.py       # 摄像头推理线程
+├── p3_gesture_classifier.py   # 分类器（自动扫描 models/）
+├── p3_hand_tracker.py         # MediaPipe 手部检测
+├── p3_actions.py              # Windows API 操作映射
+├── p1_extract_features.py     # 特征提取（训练用）
+├── p2_train_knn.py            # KNN/SVM 训练（训练用）
+│
+├── train/0..8/                # 9 类手势训练图片
+├── csv/                       # 特征 CSV 文件
+│   ├── hand_gesture_data.csv         # raw 特征
+│   └── hand_gesture_data_*.csv       # hand / hand_v2 / dist
+├── models/                    # .pkl 模型文件（共 8 个）
+│
+├── README.md                  # 本文件
+└── 其他 .md                    # 历史文档
 ```
 
-## 架构与数据流
+---
 
-```
-摄像头 → [gesture_worker.py] → MediaPipe 21点检测 → 归一化 → KNN/SVM 分类
-                                         ↓                          ↓
-                                   画面绘制（骨架+进度条+FPS+模型名）
-                                                                   ↓
-                                         平滑投票（9帧窗口）+ 1.5s 锁定机制
-                                                                   ↓
-                                              [main.py] 状态机 → 触发动作
-                                                                   ↓
-                                              [actions.py] Windows API 模拟键盘/鼠标
-```
-
-- **手势分类**使用 KNN (k=5, distance加权) 或 SVM (RBF, C=10)
-- **锁定机制**防止误触：手势需持续稳定 1.5 秒才触发，手势不变则保持锁定不重复触发
-- **两级菜单**：首页手势 1-8 进入功能 → 功能内子手势执行操作 → 手势 0 返回首页
-
-## 八个功能模块
+## 8 个功能模块
 
 | 手势 | 功能 | 子操作 |
-|------|------|--------|
+|:----:|------|--------|
 | 1 | PPT 控制 | 下一页 / 上一页 / 开始放映 / 结束放映 |
 | 2 | 媒体播放 | 播放暂停 / 下一首 / 上一首 / 音量+ / 音量- |
 | 3 | 窗口管理 | 切换窗口 / 最小化 / 关闭 / 分屏左 / 分屏右 |
@@ -63,85 +61,108 @@ Exp_Final/
 | 5 | 系统控制 | 锁屏 / 截图 / 任务视图 / 显示桌面 |
 | 6 | 文件操作 | 新建文件夹 / 复制 / 粘贴 / 删除 / 重命名 |
 | 7 | 输入辅助 | 全选 / 撤销 / 保存 / 查找 / 切换输入法 |
-| 8 | 鼠标控制 | 左键点击 / 右键点击 / 双击 / 滚轮上 / 滚轮下 |
+| 8 | 鼠标控制 | 左键 / 右键 / 双击 / 滚轮上 / 滚轮下 |
 | 0 | 返回 | 从功能内返回主菜单 |
 
-## 四种模型对比
+两层菜单：首页手势 1-8 进功能 → 子手势执行操作 → 手势 0 返回。
 
-| 模型 | 特征 | 算法 | 5折交叉验证 |
-|------|------|------|-------------|
-| KNN | 相机坐标系（原始） | KNN k=5 | 98.89% |
-| SVM | 相机坐标系（原始） | SVM RBF | 98.99% |
-| KNN_HAND | 手掌坐标系（旋转不变） | KNN k=5 | 98.99% |
-| SVM_HAND | 手掌坐标系（旋转不变） | SVM RBF | 99.09% |
+---
 
-- 原始坐标系：特征为相对手腕的 xyz 坐标，手旋转会影响识别
-- 手掌坐标系：2D 旋转对齐让中指根始终指向正上方，旋转不变
-- GUI 下拉框可实时切换，画面右上角显示当前模型名
+## 8 个模型
+
+| 文件名 | 特征模式 | 维度 | 分类器 |
+|--------|---------|:----:|:------:|
+| `hand_gesture_knn.pkl` | raw | 63 | KNN k=5 |
+| `hand_gesture_svm.pkl` | raw | 63 | SVM RBF |
+| `hand_gesture_knn_hand.pkl` | hand | 42 | KNN k=5 |
+| `hand_gesture_svm_hand.pkl` | hand | 42 | SVM RBF |
+| `hand_gesture_knn_hand_v2.pkl` | hand_v2 | 42 | KNN k=5 |
+| `hand_gesture_svm_hand_v2.pkl` | hand_v2 | 42 | SVM RBF |
+| `hand_gesture_knn_dist.pkl` | dist | 210 | KNN k=5 |
+| `hand_gesture_svm_dist.pkl` | dist | 210 | SVM RBF |
+
+### 四种特征模式的原理
+
+**raw（原始坐标系，63 维）**
+以手腕为原点，按手腕到中指根距离缩放。保留 xyz。对旋转和翻转均敏感。
+
+**hand（2D 旋转对齐，42 维）**
+计算手腕到中指根的方向角，旋转整个手让中指根指向正上方，然后丢掉 z。对平面旋转不敏感，翻转（手背）时形状成镜像。实测效果最好。
+
+**hand_v2（2D 手掌正交基，42 维）**
+用 4 个掌骨点构造正交基：Y = 手腕→中指根，X = 食指根→小指根（Gram-Schmidt 正交化）。丢弃 z。数学上比 hand 更严谨，实测略低于 hand。
+
+**dist（距离特征，210 维）**
+计算 21 个点之间全部 210 个成对欧氏距离，按手腕到中指根归一化。平移、旋转、翻转完全不变——手心手背算出来一样。解决手背翻转问题的最佳方案。
+
+### 接口
+
+```python
+classifier = GestureClassifier()           # 自动扫描 models/，默认选字母序第一个
+classifier.predict(landmarks)              # → (pred, proba)
+classifier.switch("hand_gesture_knn_dist") # 切换模型
+classifier.current                         # 当前模型 key
+classifier.available                       # 所有模型列表
+```
+
+系统根据文件名自动识别特征模式：
+- 含 `_dist` → 距离（210 维）
+- 含 `_hand_v2` → 正交基（42 维）
+- 含 `_hand` → 旋转对齐（42 维）
+- 其他 → 原始坐标（63 维）
+
+---
 
 ## 关键参数
 
-| 参数 | 值 | 说明 |
-|------|-----|------|
-| LOCK_DURATION | 1.5s | 手势锁定所需持续时间 |
-| SMOOTH_WINDOW | 9 帧 | 平滑投票窗口大小 |
-| MIN_CONFIDENCE | 0.15 | 最低置信度阈值 |
-| FRAME_SKIP | 1 | 隔帧检测（隔 1 帧） |
-| 检测分辨率 | 320×240 | 内部推理分辨率 |
-| 摄像头分辨率 | 640×480 | 显示分辨率 |
-| KNN k | 5 | 最近邻数量 |
-| KNN weights | distance | 距离加权 |
+| 参数 | 位置 | 值 | 说明 |
+|------|------|:--:|------|
+| `LOCK_DURATION` | `gesture_worker.py` | 0.9s | 锁定等待时间 |
+| `SMOOTH_WINDOW` | `gesture_worker.py` | 7 帧 | 平滑投票窗口 |
+| `MIN_CONFIDENCE` | `gesture_worker.py` | 0.25 | 最低置信度 |
+| `UNLOCK_THRESHOLD` | `gesture_worker.py` | 3 帧 | 解锁所需连续不同帧 |
+| `FRAME_SKIP` | `gesture_worker.py` | 2 | 每 3 帧检测 1 次 |
+| `ACTION_COOLDOWN` | `gui.py` | 1.0s | 动作触发冷却 |
+| 检测分辨率 | 内部 | 320×240 | MediaPipe 推理分辨率 |
+| 显示分辨率 | 显示 | 640×480 | 画面分辨率 |
 
-## GUI 界面
+---
 
-- **左侧**：640×480 摄像头画面，左上角 FPS，右上角模型名，底部锁定进度条
-- **右侧**：三个 QGroupBox（1:2:1 比例，Fusion 浅色主题）
-  - 识别：锁定进度条 + 手势数字 + 置信度
-  - 状态与操作：状态标题 + 描述 + 可用操作列表 + 返回提示
-  - 设置：模型切换（KNN/SVM/KNN_HAND/SVM_HAND）+ 骨架/锁定条开关
-- **右上角悬浮窗**：实时锁定状态 + 当前功能 + 可选操作
+## 数据流
 
-## 改进记录（相比原始版本）
-
-1. **启动即开摄像头**，无需手动点击按钮
-2. **锁定逻辑重写**：手势不变不释放锁定，手势改变才解锁，避免重复触发
-3. **旋转不变特征**：手掌坐标系 2D 对齐，手左右旋转不影响识别
-4. **四种模型可切换**：原始 KNN/SVM + 手掌坐标系 KNN/SVM，画面实时显示当前模型
-5. **模型切换真正生效**：Worker 和 GUI 共享同一个 classifier 实例
-6. **首次手部卡顿消除**：启动时用训练图预热 MediaPipe 跟踪模型
-7. **退出不卡顿**：去掉 Worker.stop() 中的阻塞 wait()
-8. **新增第八类鼠标控制**：左键/右键/双击/滚轮
-9. **右侧面板重构**：三个统一 QGroupBox，状态标题不变色，操作列表统一缩进
-10. **参数调优**：锁定时间 2.5→1.5s，置信度 0.3→0.15，平滑窗口 7→9
-11. **悬浮窗优化**：浅色风格匹配 Fusion 主题，简洁清晰
-12. **训练集更新**：移除手势 9，重提取特征并重训全部模型
-
-## 运行方式
-
-```powershell
-# 首次或修改训练数据后
-python extract_features.py    # 提取特征 → csv/
-python train_knn.py           # 训练模型 → models/
-
-# 日常运行
-python main.py
 ```
+摄像头 → MediaPipe 21点 → 归一化 → KNN/SVM → 平滑投票(7帧)
+                                        ↓
+              0.9s锁定机制 → 状态机(home/function) → Windows API 操作
+```
+
+稳定性机制：
+- 置信度 < 0.25 的预测直接丢弃
+- 平滑投票：7 帧内取众数
+- 锁定：手势稳定 0.9s 才触发，连续 3 帧不同才解锁
+- 动作冷却：1.0s 内不重复触发
+
+---
+
+## 性能优化
+
+- 隔帧检测（每 3 帧检测 1 次）
+- MediaPipe 推理分辨率 320×240
+- 假图预热 MediaPipe + 分类器，消除首次伸手卡顿
+- 后台线程预加载全部模型，切换零等待
+- 手消失 0.3s 内保持锁定进度
+
+---
 
 ## 依赖
 
-- Python 3.x
-- PySide6
-- mediapipe
-- opencv-python
-- numpy
-- scikit-learn
-- pandas
-- pycaw（可选，音量控制）
-- comtypes（可选，音量控制）
-
-## 注意事项
-
-- 手势识别依赖训练图片质量，建议在相似光照和背景下使用
-- 鼠标控制类操作发到当前焦点窗口，需确保目标窗口在前台
-- 6-文件操作和 8-鼠标控制在文件管理器等窗口使用效果最佳
-- 模型切换在画面右上角实时显示，可确认是否生效
+| 包 | 用途 | 必选 |
+|----|------|:----:|
+| PySide6 | GUI | ✅ |
+| mediapipe | 手部检测 | ✅ |
+| opencv-python | 摄像头/图像 | ✅ |
+| numpy | 数值计算 | ✅ |
+| scikit-learn | KNN/SVM | ✅ |
+| pandas | CSV 读取（训练用） | 仅训练 |
+| pycaw | 音量控制 | 可选 |
+| comtypes | 音量控制 | 可选 |

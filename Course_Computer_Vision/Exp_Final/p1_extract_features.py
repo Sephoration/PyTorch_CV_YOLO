@@ -10,6 +10,7 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "csv")
 OUTPUT_CSV_RAW = os.path.join(OUTPUT_DIR, "hand_gesture_data.csv")
 OUTPUT_CSV_HAND = os.path.join(OUTPUT_DIR, "hand_gesture_data_hand.csv")
 OUTPUT_CSV_HAND_V2 = os.path.join(OUTPUT_DIR, "hand_gesture_data_hand_v2.csv")
+OUTPUT_CSV_DIST = os.path.join(OUTPUT_DIR, "hand_gesture_data_dist.csv")
 
 CLASS_NAMES = ["0", "1", "2", "3", "4", "5", "6", "7", "8"]
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
@@ -31,6 +32,12 @@ def create_csv_header_2d():
     header = ["class_name", "file_name"]
     for i in range(21):
         header.extend([f"x{i}", f"y{i}"])
+    return header
+
+def create_csv_header_dist():
+    header = ["class_name", "file_name"]
+    for i in range(210):
+        header.append(f"d{i}")
     return header
 
 
@@ -75,15 +82,15 @@ def normalize_landmarks_hand(landmarks):
 
 
 def normalize_landmarks_hand_v2(landmarks):
-    """3D 手掌坐标系归一化：用 4 个掌骨点构造完整三维正交基
+    """2D 手掌坐标系归一化（去掉 Z 轴，避免手心/手背翻转导致符号反转）
+     用 4 个掌骨点构造 2D 正交基：
      Y = wrist(0) → middle_mcp(9)
      X = index_mcp(5) → pinky_mcp(17)（Gram-Schmidt 正交化）
-     Z = X × Y
      """
-    wrist    = np.array([landmarks[0].x,  landmarks[0].y,  landmarks[0].z])
-    index_mcp  = np.array([landmarks[5].x,  landmarks[5].y,  landmarks[5].z])
-    middle_mcp = np.array([landmarks[9].x,  landmarks[9].y,  landmarks[9].z])
-    pinky_mcp  = np.array([landmarks[17].x, landmarks[17].y, landmarks[17].z])
+    wrist    = np.array([landmarks[0].x,  landmarks[0].y])
+    index_mcp  = np.array([landmarks[5].x,  landmarks[5].y])
+    middle_mcp = np.array([landmarks[9].x,  landmarks[9].y])
+    pinky_mcp  = np.array([landmarks[17].x, landmarks[17].y])
 
     y_axis = middle_mcp - wrist
     scale = np.linalg.norm(y_axis)
@@ -97,28 +104,47 @@ def normalize_landmarks_hand_v2(landmarks):
     if x_norm > 1e-6:
         x_axis = x_axis / x_norm
     else:
-        fallback = np.array([1.0, 0.0, 0.0]) if abs(y_axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-        x_axis = np.cross(y_axis, fallback)
-        x_axis = x_axis / np.linalg.norm(x_axis)
+        # 回退：选择一个与 y_axis 不平行的向量
+        fallback = np.array([1.0, 0.0]) if abs(y_axis[0]) < 0.9 else np.array([0.0, 1.0])
+        x_axis = y_axis - np.dot(y_axis, fallback) * fallback
+        x_norm = np.linalg.norm(x_axis)
+        if x_norm > 1e-6:
+            x_axis = x_axis / x_norm
+        else:
+            x_axis = np.array([1.0, 0.0])
 
-    z_axis = np.cross(x_axis, y_axis)
-    R = np.column_stack([x_axis, y_axis, z_axis])
+    R = np.column_stack([x_axis, y_axis])
 
     row = []
     for lm in landmarks:
-        p = np.array([lm.x, lm.y, lm.z])
+        p = np.array([lm.x, lm.y])
         p_local = R.T @ (p - wrist)
-        row.extend([p_local[0] / scale, p_local[1] / scale, p_local[2] / scale])
+        row.extend([p_local[0] / scale, p_local[1] / scale])
     return row
 
 
+def normalize_landmarks_distances(landmarks):
+    """用所有点对之间的欧氏距离作为特征，完全几何不变（平移/旋转/翻转不变）"""
+    pts = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
+    features = []
+    for i in range(21):
+        for j in range(i + 1, 21):
+            features.append(np.linalg.norm(pts[i] - pts[j]))
+    # 按手腕到中指根距离归一化，实现尺度不变
+    scale = features[9] if len(features) > 9 else 1.0  # 点 0-9 是第 9 个距离
+    if scale < 1e-6:
+        scale = 1.0
+    return [f / scale for f in features]
+
+
 def landmarks_to_rows(landmarks):
-    """对一个手势的 landmarks，返回 (raw_row, hand_row, hand_v2_row) 三个版本"""
+    """对一个手势的 landmarks，返回 (raw_row, hand_row, hand_v2_row, dist_row) 四个版本"""
     if len(landmarks) != 21:
-        return None, None, None
+        return None, None, None, None
     return (normalize_landmarks_raw(landmarks),
             normalize_landmarks_hand(landmarks),
-            normalize_landmarks_hand_v2(landmarks))
+            normalize_landmarks_hand_v2(landmarks),
+            normalize_landmarks_distances(landmarks))
 
 
 if __name__ == '__main__':
@@ -146,16 +172,20 @@ if __name__ == '__main__':
     total_count = 0
     success_count = 0
     failed_count = 0
+    mirror_count = 0
 
     f_raw = open(OUTPUT_CSV_RAW, "w", newline="")
     f_hand = open(OUTPUT_CSV_HAND, "w", newline="")
     f_hand_v2 = open(OUTPUT_CSV_HAND_V2, "w", newline="")
+    f_dist = open(OUTPUT_CSV_DIST, "w", newline="")
     writer_raw = csv.writer(f_raw)
     writer_hand = csv.writer(f_hand)
     writer_hand_v2 = csv.writer(f_hand_v2)
+    writer_dist = csv.writer(f_dist)
     writer_raw.writerow(create_csv_header())
     writer_hand.writerow(create_csv_header_2d())
-    writer_hand_v2.writerow(create_csv_header())
+    writer_hand_v2.writerow(create_csv_header_2d())
+    writer_dist.writerow(create_csv_header_dist())
 
     try:
         for class_name in CLASS_NAMES:
@@ -188,24 +218,44 @@ if __name__ == '__main__':
                     continue
 
                 hand_landmarks = results.hand_landmarks[0]
-                raw_row, hand_row, hand_v2_row = landmarks_to_rows(hand_landmarks)
-                if raw_row is None or hand_row is None or hand_v2_row is None:
+                raw_row, hand_row, hand_v2_row, dist_row = landmarks_to_rows(hand_landmarks)
+                if raw_row is None:
                     failed_count += 1
                     continue
 
                 writer_raw.writerow([class_name, file_name] + raw_row)
                 writer_hand.writerow([class_name, file_name] + hand_row)
                 writer_hand_v2.writerow([class_name, file_name] + hand_v2_row)
+                writer_dist.writerow([class_name, file_name] + dist_row)
                 success_count += 1
+
+                # ---- 镜像翻转增强：对同一张图做水平翻转再提取特征 ----
+                mirror_file = f"{os.path.splitext(file_name)[0]}_mirror.png"
+                image_flip = cv2.flip(image, 1)  # 水平翻转
+                image_flip_rgb = cv2.cvtColor(image_flip, cv2.COLOR_BGR2RGB)
+                mp_image_flip = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_flip_rgb)
+                results_flip = landmarker.detect(mp_image_flip)
+                if results_flip.hand_landmarks:
+                    hand_lms_flip = results_flip.hand_landmarks[0]
+                    raw_flip, hand_flip, hand_v2_flip, dist_flip = landmarks_to_rows(hand_lms_flip)
+                    if raw_flip:
+                        writer_raw.writerow([class_name, mirror_file] + raw_flip)
+                        writer_hand.writerow([class_name, mirror_file] + hand_flip)
+                        writer_hand_v2.writerow([class_name, mirror_file] + hand_v2_flip)
+                        # Dist 模式不写镜像（距离特征已几何不变，不需要）
+                        mirror_count += 1
     finally:
         f_raw.close()
         f_hand.close()
         f_hand_v2.close()
+        f_dist.close()
 
-    print(f"\n完成！总计 {total_count} 张")
-    print(f"成功：{success_count}  |  失败：{failed_count}")
+    print(f"\n完成！总计 {total_count} 张原始图片")
+    print(f"成功提取原图：{success_count}  |  失败：{failed_count}")
+    print(f"镜像增强新增：{mirror_count}  |  总样本：{success_count + mirror_count}")
     print(f"原始特征 CSV：{OUTPUT_CSV_RAW}")
     print(f"手掌坐标系(2D) CSV：{OUTPUT_CSV_HAND}")
-    print(f"手掌坐标系(3D) CSV：{OUTPUT_CSV_HAND_V2}")
+    print(f"手掌坐标系(2D-正交基) CSV：{OUTPUT_CSV_HAND_V2}")
+    print(f"距离特征 CSV：{OUTPUT_CSV_DIST}")
 
     landmarker.close()

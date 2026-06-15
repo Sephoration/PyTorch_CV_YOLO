@@ -7,6 +7,8 @@ MODEL_DIR = os.path.join(BASE_DIR, "models")
 
 
 def _infer_feature_mode(filename):
+    if "_dist" in filename.lower():
+        return "dist"
     if "_hand_v2" in filename.lower():
         return "hand_v2"
     if "_hand" in filename.lower():
@@ -35,6 +37,8 @@ class GestureClassifier:
             self._load(self.current)  # 加载默认模型
 
     def _normalize(self, landmarks, mode):
+        if mode == "dist":
+            return self._normalize_distances(landmarks)
         if mode == "hand":
             return self._normalize_hand(landmarks)
         if mode == "hand_v2":
@@ -112,10 +116,11 @@ class GestureClassifier:
 
     @staticmethod
     def _normalize_hand_v2(landmarks):
-        wrist    = np.array([landmarks[0].x,  landmarks[0].y,  landmarks[0].z])
-        index_mcp  = np.array([landmarks[5].x,  landmarks[5].y,  landmarks[5].z])
-        middle_mcp = np.array([landmarks[9].x,  landmarks[9].y,  landmarks[9].z])
-        pinky_mcp  = np.array([landmarks[17].x, landmarks[17].y, landmarks[17].z])
+        """2D 手掌坐标系（去掉 Z，避免手心/手背翻转导致符号反转）"""
+        wrist    = np.array([landmarks[0].x,  landmarks[0].y])
+        index_mcp  = np.array([landmarks[5].x,  landmarks[5].y])
+        middle_mcp = np.array([landmarks[9].x,  landmarks[9].y])
+        pinky_mcp  = np.array([landmarks[17].x, landmarks[17].y])
         y_axis = middle_mcp - wrist
         scale = np.linalg.norm(y_axis)
         if scale < 1e-6:
@@ -127,13 +132,31 @@ class GestureClassifier:
         if x_norm > 1e-6:
             x_axis = x_axis / x_norm
         else:
-            fallback = np.array([1.0, 0.0, 0.0]) if abs(y_axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-            x_axis = np.cross(y_axis, fallback)
-            x_axis = x_axis / np.linalg.norm(x_axis)
-        z_axis = np.cross(x_axis, y_axis)
-        R = np.column_stack([x_axis, y_axis, z_axis])
-        pts = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
+            # 回退：选择一个与 y_axis 不平行的向量
+            fallback = np.array([1.0, 0.0]) if abs(y_axis[0]) < 0.9 else np.array([0.0, 1.0])
+            x_axis = y_axis - np.dot(y_axis, fallback) * fallback
+            xn2 = np.linalg.norm(x_axis)
+            if xn2 > 1e-6:
+                x_axis = x_axis / xn2
+            else:
+                x_axis = np.array([1.0, 0.0])
+        R = np.column_stack([x_axis, y_axis])
+        pts = np.array([[lm.x, lm.y] for lm in landmarks])
         return ((pts - wrist) @ R.T / scale).reshape(1, -1)
+
+    @staticmethod
+    def _normalize_distances(landmarks):
+        """用所有点对之间的欧氏距离作为特征，完全几何不变"""
+        pts = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
+        features = []
+        for i in range(21):
+            for j in range(i + 1, 21):
+                features.append(np.linalg.norm(pts[i] - pts[j]))
+        # 按手腕到中指根距离归一化（点 0-9 是第 9 个距离）
+        scale = features[9] if len(features) > 9 else 1.0
+        if scale < 1e-6:
+            scale = 1.0
+        return (np.array(features) / scale).reshape(1, -1)
 
     def normalize(self, landmarks):
         mode = self.meta[self.current]["feature_mode"]

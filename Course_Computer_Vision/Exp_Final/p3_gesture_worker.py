@@ -8,7 +8,7 @@ from p3_gesture_classifier import GestureClassifier
 
 LOCK_DURATION = 0.9
 SMOOTH_WINDOW = 7
-MIN_CONFIDENCE = 0.15
+MIN_CONFIDENCE = 0.25
 FRAME_SKIP = 2          # 隔 2 帧检测（每 3 帧一次检测），大幅提升 FPS
 UNLOCK_THRESHOLD = 3   # 连续 N 帧不同手势才解锁，防噪声误断
 HAND_HOLD = 0.3        # 手消失后锁定进度保持时间（秒）

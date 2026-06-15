@@ -5,7 +5,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -19,6 +19,8 @@ MODELS = {
     "hand_gesture_svm_hand.pkl":     ("csv", "hand_gesture_data_hand.csv",     "svm"),
     "hand_gesture_knn_hand_v2.pkl":  ("csv", "hand_gesture_data_hand_v2.csv",  "knn"),
     "hand_gesture_svm_hand_v2.pkl":  ("csv", "hand_gesture_data_hand_v2.csv",  "svm"),
+    "hand_gesture_knn_dist.pkl":     ("csv", "hand_gesture_data_dist.csv",     "knn"),
+    "hand_gesture_svm_dist.pkl":     ("csv", "hand_gesture_data_dist.csv",     "svm"),
 }
 
 
@@ -46,6 +48,17 @@ def train_and_save(X, y, model_name, algo):
             ('classifier', SVC(kernel="rbf", C=10, gamma="scale", probability=True))
         ])
 
+    # ---- 分割测试集评估真实泛化能力 ----
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y)
+    model.fit(X_train, y_train)
+    y_pred_test = model.predict(X_test)
+    test_acc = accuracy_score(y_test, y_pred_test)
+    print(f"\n测试集准确率（留出法）：{test_acc:.4f}")
+    print("\n测试集分类报告（关注 6/7 召回率）：")
+    print(classification_report(y_test, y_pred_test, digits=4))
+
+    # ---- 用全部数据训练最终模型（保存用）----
     model.fit(X, y)
 
     cv_scores = cross_val_score(model, X, y, cv=5)
@@ -60,12 +73,10 @@ def train_and_save(X, y, model_name, algo):
         pickle.dump(model, f)
     print(f"模型已保存：{model_path}")
 
-    print("\n分类报告：")
-    print(classification_report(y, y_pred))
     labels = sorted(y.unique())
     cm = confusion_matrix(y, y_pred, labels=labels)
     header = "     " + "".join(f"{l:>4}" for l in labels)
-    print(f"\n混淆矩阵（行列对应 labels={labels}）：")
+    print(f"\n混淆矩阵（行列对应 labels={labels}，全数据）：")
     print(header)
     for i, row in enumerate(cm):
         print(f"真{i}  " + "".join(f"{v:4}" for v in row))
