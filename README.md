@@ -1,7 +1,7 @@
 
 计算机视觉、深度学习与 YOLO 目标检测课程项目。
 
-#### Course_Computer_Vision
+### Course_Computer_Vision
 
 MediaPipe 手部/姿态关键点检测、手势识别 (KNN)、PySide6 桌面应用。
 
@@ -10,7 +10,7 @@ MediaPipe 手部/姿态关键点检测、手势识别 (KNN)、PySide6 桌面应�
 - **Exp_Midterm** — 基于手势控制的图片浏览器
 - **PySide6-gui** — 集成手势控制与 YOLO 追踪的桌面应用
 
-#### Course_Deep_Learning
+### Course_Deep_Learning
 
 强化学习与 YOLO 目标追踪。
 
@@ -18,7 +18,7 @@ MediaPipe 手部/姿态关键点检测、手势识别 (KNN)、PySide6 桌面应�
 - **YOLO26Tracking** — 目标追踪：区域分类、轨迹绘制、变道检测、计数监控
 - **Exp_Final** — YOLO 追踪完整流程 + GUI
 
-#### Course_YOLO
+### Course_YOLO
 
 YOLO 全流程专项：分类、检测、姿态估计。
 
