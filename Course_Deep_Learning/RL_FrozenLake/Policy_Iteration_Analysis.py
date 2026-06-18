@@ -1,496 +1,300 @@
 """
-策略迭代改造与多状态评估分析
+策略迭代改造与多状态评估分析 — 实验 1
 
-功能:
-  1. Value Iteration 实现 (与 Policy Iteration 对比)
-  2. 收敛过程可视化 (V(s) 随迭代变化曲线)
-  3. 多状态起始评估 (所有 16 个状态的 mean_return)
-  4. gamma 超参数敏感度分析
-  5. V(s) / Q(s,a) 热力图可视化
-  6. 策略对比 (Random vs Human vs Optimal)
+功能（对应 PPT 4 个任务）:
+  [Task 1] 策略迭代改造与实现
+      - 独立函数 policy_iteration(env) 替代 class 封装
+      - 运行得到最优策略 π*, print_policy() 展示
+      - 收敛过程可视化
+  [Task 2] 不同起始状态评估
+      - 对状态 0、10、14 分别计算 mean_return
+      - 比较分析哪个状态回报最高及原因
+  [Task 3] 环境 transition 改造
+      - 让冰洞 7 变安全 → 重新跑策略迭代
+      - 对比改造前后策略与成功率
+  [Task 4] Q 函数可视化与对比
+      - 计算 Q 表，打印 Q 值
+      - 对比 Human_Agent vs π* 的 Q 值差异分析
+  [Bonus] 学生自己实现 policy_iteration() 占位
 
 用法:
   python Policy_Iteration_Analysis.py
 
 输出:
-  figures/ 目录下所有 PNG 图表 (用于 Word 报告)
+  figures/ 目录下所有 PNG 图表（用于实验报告）
 """
 
 import os
-import time
+import copy
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
-from collections import defaultdict
 
 from FrozenLake import FrozenLake, test_game, print_policy
-from Policy_Iteration import PolicyIteration
 
 
 FIG_DIR = os.path.join(os.path.dirname(__file__), "figures")
 os.makedirs(FIG_DIR, exist_ok=True)
 
+nS = 16
+nA = 4
+terminal_states = {5, 7, 11, 12, 15}
+action_labels = ['\u2190 LEFT', '\u2193 DOWN', '\u2192 RIGHT', '\u2191 UP']
+arrows = ['\u2190', '\u2193', '\u2192', '\u2191']
+terminal_labels = {5: 'H', 7: 'H', 11: 'H', 12: 'H', 15: 'G'}
+
 
 # ====================================================================
-#  1. Value Iteration
+#  Task 1: 策略迭代改造与实现（函数式，无 class）
 # ====================================================================
-class ValueIteration:
-    """
-    值迭代 (Value Iteration) — 与 Policy Iteration 对比分析
 
-    核心区别:
-      - Policy Iteration:  完整策略评估 → 策略改进 → 重复
-      - Value Iteration:   一步 Bellman 更新 → 提取策略 (无显式策略评估)
-    """
+def _build_model(transition):
+    P = {}
+    for s in range(nS):
+        P[s] = {}
+        for a in range(nA):
+            P[s][a] = transition[s][a]
+    return P
 
-    def __init__(self, env, gamma=0.9, theta=1e-6):
-        self.env = env
-        self.gamma = gamma
-        self.theta = theta
-        self.nS = 16
-        self.nA = 4
-        self.V = np.zeros(self.nS)
-        self.terminal_states = {5, 7, 11, 12, 15}
-        self._convergence_history = []
 
-    def _build_model(self):
-        P = {}
-        for s in range(self.nS):
-            P[s] = {}
-            for a in range(self.nA):
-                P[s][a] = self.env.transition[s][a]
-        return P
-
-    def solve(self, max_iterations=1000):
-        """
-        值迭代主循环: V(s) = max_a Σ P(s'|s,a) [r + γ V(s')]
-
-        返回:
-          V: 最优状态价值函数
-          n_iter: 实际迭代次数
-        """
-        P = self._build_model()
-        self._convergence_history = [self.V.copy()]
-
-        for i in range(max_iterations):
-            delta = 0
-            V_new = np.zeros(self.nS)
-
-            for s in range(self.nS):
-                if s in self.terminal_states:
-                    continue
-
-                max_q = float('-inf')
-                for a in range(self.nA):
-                    q_val = 0
-                    for prob, s_next, reward, done in P[s][a]:
-                        q_val += prob * (reward + self.gamma * self.V[s_next] * (not done))
-                    max_q = max(max_q, q_val)
-
-                V_new[s] = max_q
-                delta = max(delta, abs(self.V[s] - V_new[s]))
-
-            self.V = V_new
-            self._convergence_history.append(self.V.copy())
-
-            if delta < self.theta:
-                return self.V, i + 1
-
-        return self.V, max_iterations
-
-    def extract_policy(self):
-        """从 V(s) 提取贪心策略"""
-        P = self._build_model()
-        policy = {}
-        for s in range(self.nS):
-            if s in self.terminal_states:
-                policy[s] = 0
+def policy_evaluation(transition, policy, V, gamma=0.9, theta=1e-6):
+    P = _build_model(transition)
+    while True:
+        delta = 0
+        for s in range(nS):
+            if s in terminal_states:
                 continue
-            q_values = np.zeros(self.nA)
-            for a in range(self.nA):
+            v_old = V[s]
+            v_new = 0
+            for a in range(nA):
+                action_prob = policy[s][a]
+                if action_prob == 0:
+                    continue
                 for prob, s_next, reward, done in P[s][a]:
-                    q_values[a] += prob * (reward + self.gamma * self.V[s_next] * (not done))
-            policy[s] = int(np.argmax(q_values))
-        return policy
+                    v_new += action_prob * prob * (reward + gamma * V[s_next] * (not done))
+            V[s] = v_new
+            delta = max(delta, abs(v_old - V[s]))
+        if delta < theta:
+            break
+    return V
 
-    def get_convergence_history(self):
-        return np.array(self._convergence_history)
+
+def policy_improvement(transition, V, policy, gamma=0.9):
+    P = _build_model(transition)
+    policy_stable = True
+    new_policy = np.zeros([nS, nA])
+    for s in range(nS):
+        if s in terminal_states:
+            new_policy[s] = policy[s]
+            continue
+        q_values = np.zeros(nA)
+        for a in range(nA):
+            for prob, s_next, reward, done in P[s][a]:
+                q_values[a] += prob * (reward + gamma * V[s_next] * (not done))
+        best_action = int(np.argmax(q_values))
+        new_policy[s][best_action] = 1.0
+        if not np.array_equal(new_policy[s], policy[s]):
+            policy_stable = False
+    return policy_stable, new_policy
+
+
+def policy_iteration(env, gamma=0.9, theta=1e-6, max_iterations=1000):
+    V = np.zeros(nS)
+    policy = np.ones([nS, nA]) / nA
+    for i in range(max_iterations):
+        V = policy_evaluation(env.transition, policy, V, gamma, theta)
+        policy_stable, policy = policy_improvement(env.transition, V, policy, gamma)
+        if policy_stable:
+            return V, policy, i + 1
+    return V, policy, max_iterations
+
+
+def extract_deterministic_policy(policy):
+    return {s: int(np.argmax(policy[s])) for s in range(nS)}
+
+
+def show_values(V):
+    print("\n\u72b6\u6001\u4ef7\u503c\u51fd\u6570 V(s):")
+    print("-" * 35)
+    for s in range(nS):
+        if s in terminal_states:
+            label = " H" if s != 15 else " G"
+            print(f"| {label}  {V[s]:7.2f} ", end="")
+        else:
+            print(f"| {str(s).zfill(2)}  {V[s]:7.2f} ", end="")
+        if (s + 1) % 4 == 0:
+            print("|")
+    print("-" * 35)
+
+
+def plot_convergence():
+    """Task 1: 策略迭代收敛过程 + 展示最优策略"""
+    env = FrozenLake()
+
+    V_track = [np.zeros(nS)]
+    V_curr = np.zeros(nS)
+    pi = np.ones([nS, nA]) / nA
+    for _ in range(100):
+        V_curr = policy_evaluation(env.transition, pi, V_curr)
+        stable, pi = policy_improvement(env.transition, V_curr, pi)
+        V_track.append(V_curr.copy())
+        if stable:
+            break
+    V_track = np.array(V_track)
+    n_iter = V_track.shape[0] - 1
+    V_final = V_track[-1]
+    policy_dict = extract_deterministic_policy(pi)
+
+    print("=" * 60)
+    print("Task 1: \u7b56\u7565\u8fed\u4ee3\u6539\u9020\u4e0e\u5b9e\u73b0")
+    print("=" * 60)
+    print(f"\u6536\u655b\u8fed\u4ee3\u6b21\u6570: {n_iter}")
+
+    show_values(V_final)
+
+    print("\n\u6700\u4f18\u7b56\u7565 \u03c0*:")
+    print_policy(lambda s: policy_dict[s])
+
+    rate = test_game(env, lambda s: policy_dict[s], n_episodes=1000)
+    print(f"\u6700\u4f18\u7b56\u7565\u6210\u529f\u7387: {rate:.2%}")
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    repr_states = [0, 1, 6, 10, 14, 15]
+    state_labels = ['S(\u8d77\u70b9)', '1', '6', '10', '14', 'G(\u76ee\u6807)']
+    for s, label in zip(repr_states, state_labels):
+        values = V_track[:, s]
+        ax.plot(range(len(values)), values, label=f'State {s} {label}',
+                linewidth=1.5, marker='o', markersize=3, markevery=max(1, len(values)//10))
+    ax.set_xlabel('Iteration')
+    ax.set_ylabel('V(s)')
+    ax.set_title(f'Policy Iteration Convergence (\u03b3=0.9, {n_iter} iters)')
+    ax.legend(fontsize=8, loc='lower right')
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    path = os.path.join(FIG_DIR, '01_convergence.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  [OK] {path}")
+
+    return policy_dict, V_final
 
 
 # ====================================================================
-#  2. 多状态评估
+#  Task 2: 不同起始状态评估
 # ====================================================================
-def mean_return(env, pi, state0, n_episodes=5000, max_steps=100):
-    """计算从 state0 开始使用策略 pi 的平均回报"""
+
+def mean_return(env, pi_dict, state0, n_episodes=5000, max_steps=100):
     results = []
     for _ in range(n_episodes):
         env.position = state0
-        Done = False
-        steps = 0
+        s = state0
         total_reward = 0.0
-        while not Done and steps < max_steps:
-            action = pi(state0) if callable(pi) else pi[state0]
-            state0, reward, Done = env.step(action)
+        for _ in range(max_steps):
+            action = pi_dict[s]
+            s, reward, done = env.step(action)
             total_reward += reward
-            steps += 1
+            if done:
+                break
         results.append(total_reward)
     return float(np.mean(results))
 
 
-# ====================================================================
-#  3. 收敛过程可视化
-# ====================================================================
-def plot_convergence_comparison():
-    """Policy Iteration vs Value Iteration 收敛速度对比"""
+def plot_state_comparison(policy_dict):
+    """Task 2: \u5bf9\u72b6\u6001 0\u300110\u300114 \u8ba1\u7b97 mean_return"""
+    print("\n" + "=" * 60)
+    print("Task 2: \u4e0d\u540c\u8d77\u59cb\u72b6\u6001\u8bc4\u4f30")
+    print("=" * 60)
+
     env = FrozenLake()
+    target_states = [0, 10, 14]
+    returns = []
 
-    # --- Policy Iteration ---
-    pi_solver = PolicyIteration(env, gamma=0.9, theta=1e-6)
-    pi_solver.policy = np.ones([pi_solver.nS, pi_solver.nA]) / pi_solver.nA
-    pi_V = [np.zeros(16)]
-    for i in range(100):
-        pi_solver.V = pi_solver.policy_evaluation(policy=pi_solver.policy, V=pi_solver.V)
-        policy_stable, pi_solver.policy = pi_solver.policy_improvement(V=pi_solver.V)
-        pi_V.append(pi_solver.V.copy())
-        if policy_stable:
-            break
-    pi_V = np.array(pi_V)
-    pi_iterations = pi_V.shape[0] - 1
+    for s in target_states:
+        r = mean_return(env, policy_dict, s, n_episodes=5000)
+        returns.append(r)
+        print(f"  State {s:2d}: mean_return = {r:.4f}")
 
-    # --- Value Iteration ---
-    vi_solver = ValueIteration(env, gamma=0.9, theta=1e-6)
-    vi_V, vi_iters = vi_solver.solve(max_iterations=200)
-    vi_history = vi_solver.get_convergence_history()
+    best_idx = int(np.argmax(returns))
+    worst_idx = int(np.argmin(returns))
+    print(f"\n\u5206\u6790: \u72b6\u6001 {target_states[best_idx]} \u7684 mean_return \u6700\u9ad8 ({returns[best_idx]:.4f})\uff0c"
+          f"\u72b6\u6001 {target_states[worst_idx]} \u6700\u4f4e ({returns[worst_idx]:.4f})")
+    print(f"\u539f\u56e0: \u72b6\u6001 0\uff08\u8d77\u70b9\uff09\u8ddd\u79bb\u76ee\u6807\u6700\u8fdc\u4e14\u51b0\u6d1e\u591a\uff1b"
+          f"\u72b6\u6001 14 \u7d27\u90bb\u7ec8\u70b9\uff08state 15\uff09\u4e14\u4e00\u6b65\u5230\u8fbe\u6982\u7387\u9ad8\uff0c\u56e0\u6b64\u56de\u62a5\u6700\u9ad8\u3002")
 
-    # --- Plot ---
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    # 选择有代表性的状态
-    repr_states = [0, 1, 6, 10, 14, 15]
-    state_labels = ['S(起点)', '1', '6', '10', '14', 'G(目标)']
-
-    ax = axes[0]
-    for i, (s, label) in enumerate(zip(repr_states, state_labels)):
-        values = pi_V[:, s]
-        ax.plot(range(len(values)), values, label=f'State {s} {label}',
-                linewidth=1.5, marker='o', markersize=3, markevery=max(1, len(values)//10))
-    ax.set_xlabel('Iteration', fontsize=12)
-    ax.set_ylabel('V(s)', fontsize=12)
-    ax.set_title(f'Policy Iteration Convergence (γ=0.9, {pi_iterations} iters)', fontsize=13)
-    ax.legend(fontsize=8, loc='lower right')
-    ax.grid(True, alpha=0.3)
-    ax.axvline(x=pi_iterations, color='red', linestyle='--', alpha=0.7, label=f'Converge at iter {pi_iterations}')
-
-    ax = axes[1]
-    for i, (s, label) in enumerate(zip(repr_states, state_labels)):
-        values = vi_history[:, s]
-        ax.plot(range(len(values)), values, label=f'State {s} {label}',
-                linewidth=1.5, marker='s', markersize=3, markevery=max(1, len(values)//10))
-    ax.set_xlabel('Iteration', fontsize=12)
-    ax.set_ylabel('V(s)', fontsize=12)
-    ax.set_title(f'Value Iteration Convergence (γ=0.9, {vi_iters} iters)', fontsize=13)
-    ax.legend(fontsize=8, loc='lower right')
-    ax.grid(True, alpha=0.3)
-    ax.axvline(x=vi_iters, color='red', linestyle='--', alpha=0.7, label=f'Converge at iter {vi_iters}')
-
-    plt.tight_layout()
-    path = os.path.join(FIG_DIR, '01_convergence_comparison.png')
-    plt.savefig(path, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"  [OK] {path}")
-
-    return pi_iterations, vi_iters
-
-
-# ====================================================================
-#  4. 多状态评估分析
-# ====================================================================
-def plot_multi_state_evaluation():
-    """对所有 16 个状态进行多起始状态评估"""
-    env = FrozenLake()
-
-    # 训练最优策略
-    solver = PolicyIteration(env, gamma=0.9)
-    solver.policy = np.ones([solver.nS, solver.nA]) / solver.nA
-    V_opt, policy_opt, _ = solver.solve()
-    opt_dict = solver.extract_deterministic_policy()
-
-    # 随机策略
-    np.random.seed(42)
-    random_policy = {s: np.random.randint(4) for s in range(16)}
-
-    # Human Agent 策略 (heuristic)
-    human_policy = {
-        0: 2, 1: 2, 2: 1, 3: 0,
-        4: 1, 5: 0, 6: 1, 7: 0,
-        8: 2, 9: 2, 10: 1, 11: 0,
-        12: 0, 13: 2, 14: 2, 15: 0
-    }
-
-    terminal_states = {5, 7, 11, 12, 15}
-    state_names = []
-    for s in range(16):
-        if s == 0:
-            state_names.append(f'{s}\nS')
-        elif s in terminal_states:
-            label = 'G' if s == 15 else 'H'
-            state_names.append(f'{s}\n{label}')
-        else:
-            state_names.append(str(s))
-
-    # 计算所有状态的 mean_return
-    random_returns = []
-    human_returns = []
-    optimal_returns = []
-
-    for s in range(16):
-        r1 = mean_return(env, random_policy, s, n_episodes=5000)
-        r2 = mean_return(env, human_policy, s, n_episodes=5000)
-        r3 = mean_return(env, opt_dict, s, n_episodes=5000)
-        random_returns.append(r1)
-        human_returns.append(r2)
-        optimal_returns.append(r3)
-        print(f"    State {s:2d}: Random={r1:.3f}  Human={r2:.3f}  Optimal={r3:.3f}")
-
-    fig, ax = plt.subplots(figsize=(14, 6))
-    x = np.arange(16)
-    width = 0.25
-
-    bars1 = ax.bar(x - width, random_returns, width, label='Random Agent',
-                   color='#E74C3C', alpha=0.8, edgecolor='white', linewidth=0.5)
-    bars2 = ax.bar(x, human_returns, width, label='Human Agent (Heuristic)',
-                   color='#F39C12', alpha=0.8, edgecolor='white', linewidth=0.5)
-    bars3 = ax.bar(x + width, optimal_returns, width, label='Optimal (Policy Iteration)',
-                   color='#2ECC71', alpha=0.8, edgecolor='white', linewidth=0.5)
-
-    ax.set_xlabel('Starting State', fontsize=13)
-    ax.set_ylabel('Mean Return', fontsize=13)
-    ax.set_title('Multi-State Evaluation: Mean Return by Starting State', fontsize=14, fontweight='bold')
-    ax.set_xticks(x)
-    ax.set_xticklabels(state_names, fontsize=9)
-    ax.legend(fontsize=11)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    colors = ['#E74C3C', '#F39C12', '#2ECC71']
+    bars = ax.bar([str(s) for s in target_states], returns, color=colors, alpha=0.8,
+                  edgecolor='white', linewidth=1.5, width=0.5)
+    for bar, val in zip(bars, returns):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
+                f'{val:.4f}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Starting State')
+    ax.set_ylabel('Mean Return')
+    ax.set_title('Task 2: Mean Return Comparison (States 0, 10, 14)')
     ax.grid(True, alpha=0.2, axis='y')
-    ax.axhline(y=0, color='gray', linewidth=0.5)
-
-    for i in range(16):
-        if i in terminal_states:
-            ax.axvspan(i - 0.4, i + 0.4, alpha=0.08, color='red')
-
     plt.tight_layout()
-    path = os.path.join(FIG_DIR, '02_multi_state_evaluation.png')
+    path = os.path.join(FIG_DIR, '02_state_comparison.png')
     plt.savefig(path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"  [OK] {path}")
 
-    return random_returns, human_returns, optimal_returns
+    return returns
 
 
 # ====================================================================
-#  5. Gamma 敏感度分析
+#  Task 3: 环境 transition 改造
 # ====================================================================
-def plot_gamma_sensitivity():
-    """不同 gamma 对策略迭代收敛速度和性能的影响"""
-    env = FrozenLake()
-    gammas = [0.1, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95, 0.99]
 
-    iterations = []
-    success_rates = []
-    max_Vs = []
-
-    for gamma in gammas:
-        solver = PolicyIteration(env, gamma=gamma, theta=1e-6)
-        solver.policy = np.ones([solver.nS, solver.nA]) / solver.nA
-        V_opt, policy_opt, n_iter = solver.solve()
-        opt_dict = solver.extract_deterministic_policy()
-
-        rate = test_game(env, lambda s, d=opt_dict: d[s], n_episodes=2000)
-        iterations.append(n_iter)
-        success_rates.append(rate)
-        max_Vs.append(np.max(V_opt))
-        print(f"    γ={gamma:.2f}:  {n_iter} iters,  success={rate:.2%},  max V={np.max(V_opt):.4f}")
-
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-
-    color1 = '#2980B9'
-    color2 = '#E74C3C'
-    color3 = '#27AE60'
-
-    bars1 = ax1.bar([g - 0.02 for g in range(len(gammas))], iterations, width=0.25,
-                    color=color1, alpha=0.8, label='Iterations to Converge', edgecolor='white')
-    ax1.set_xlabel('Discount Factor γ', fontsize=13)
-    ax1.set_ylabel('Number of Iterations', fontsize=13, color=color1)
-    ax1.tick_params(axis='y', labelcolor=color1)
-
-    ax2 = ax1.twinx()
-    bars2 = ax2.bar(range(len(gammas)), [r * 100 for r in success_rates], width=0.25,
-                    color=color2, alpha=0.7, label='Success Rate (%)', edgecolor='white')
-    ax2.set_ylabel('Success Rate (%)', fontsize=13, color=color2)
-    ax2.tick_params(axis='y', labelcolor=color2)
-
-    ax3 = ax1.twinx()
-    ax3.spines['right'].set_position(('outward', 60))
-    line3, = ax3.plot(range(len(gammas)), max_Vs, 'D-', color=color3, linewidth=2,
-                       markersize=8, label='Max V(s)', zorder=5)
-    ax3.set_ylabel('Max V(s)', fontsize=13, color=color3)
-    ax3.tick_params(axis='y', labelcolor=color3)
-
-    ax1.set_xticks(range(len(gammas)))
-    ax1.set_xticklabels([f'{g:.2f}' for g in gammas], fontsize=11)
-
-    bars = [bars1, bars2, line3]
-    labels = ['Iterations to Converge', 'Success Rate (%)', 'Max V(s)']
-    ax1.legend(bars, labels, loc='upper left', fontsize=10)
-
-    ax1.set_title('Gamma Sensitivity Analysis (γ effect on convergence & performance)', fontsize=13, fontweight='bold')
-    ax1.grid(True, alpha=0.2, axis='y')
-
-    plt.tight_layout()
-    path = os.path.join(FIG_DIR, '03_gamma_sensitivity.png')
-    plt.savefig(path, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"  [OK] {path}")
-
-    return gammas, iterations, success_rates
-
-
-# ====================================================================
-#  6. V(s) 与 Q(s,a) 热力图
-# ====================================================================
-def plot_v_q_heatmaps():
-    """V(s) 和 Q(s,a) 热力图可视化"""
-    env = FrozenLake()
-
-    solver = PolicyIteration(env, gamma=0.9)
-    solver.policy = np.ones([solver.nS, solver.nA]) / solver.nA
-    V_opt, policy_opt, _ = solver.solve()
-    opt_dict = solver.extract_deterministic_policy()
-
-    # 计算 Q(s,a)
-    P = {}
-    for s in range(16):
-        P[s] = {}
-        for a in range(4):
-            P[s][a] = env.transition[s][a]
-
-    Q = np.zeros((16, 4))
-    for s in range(16):
-        if s in {5, 7, 11, 12, 15}:
-            continue
-        for a in range(4):
-            for prob, s_next, reward, done in P[s][a]:
-                Q[s][a] += prob * (reward + 0.9 * V_opt[s_next] * (not done))
-
-    # 4x4 grid 标签
-    grid_labels = []
-    for r in range(4):
-        row = []
-        for c in range(4):
-            s = r * 4 + c
-            if s == 0:
-                row.append(f'{s}\nS')
-            elif s == 15:
-                row.append(f'{s}\nG')
-            elif s in {5, 7, 11, 12}:
-                row.append(f'{s}\nH')
-            else:
-                row.append(str(s))
-        grid_labels.append(row)
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-
-    ax = axes[0]
-    v_grid = V_opt.reshape(4, 4)
-    cmap = plt.cm.RdYlGn
-    cmap.set_bad('gray')
-    v_masked = np.ma.masked_where(np.isnan(v_grid), v_grid)
-    im = ax.imshow(v_grid, cmap=cmap, vmin=0, vmax=np.max(V_opt), aspect='equal')
-
-    for i in range(4):
-        for j in range(4):
-            s = i * 4 + j
-            val = V_opt[s]
-            color = 'white' if val > np.max(V_opt) * 0.6 else 'black'
-            ax.text(j, i, f'{val:.3f}', ha='center', va='center', fontsize=15,
-                    fontweight='bold', color=color)
-            sub_label = grid_labels[i][j]
-            ax.text(j, i - 0.32, sub_label, ha='center', va='center', fontsize=8, color='gray')
-
-    ax.set_xticks(range(4))
-    ax.set_yticks(range(4))
-    ax.set_xticklabels(['0', '1', '2', '3'])
-    ax.set_yticklabels(['0', '1', '2', '3'])
-    ax.set_title('State Value Function V(s) - Optimal Policy', fontsize=13, fontweight='bold')
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-
-    # 标记孔洞
-    for s in {5, 7, 11, 12}:
-        r, c = s // 4, s % 4
-        ax.add_patch(plt.Rectangle((c - 0.5, r - 0.5), 1, 1, fill=False, edgecolor='red', linewidth=3, linestyle='--'))
-
-    # Q(s,a) 热力图
-    ax = axes[1]
-    action_labels = ['← LEFT', '↓ DOWN', '→ RIGHT', '↑ UP']
-    im = ax.imshow(Q.T, cmap='viridis', aspect='auto')
-
-    for a in range(4):
-        for s in range(16):
-            val = Q[s, a]
-            if val != 0:
-                color = 'white' if val > Q.max() * 0.6 else 'black'
-                ax.text(s, a, f'{val:.2f}', ha='center', va='center', fontsize=7, color=color)
-
-    ax.set_yticks(range(4))
-    ax.set_yticklabels(action_labels, fontsize=11)
-    ax.set_xticks(range(16))
-    ax.set_xticklabels(range(16), fontsize=9)
-    ax.set_xlabel('State', fontsize=12)
-    ax.set_title('Action-Value Function Q(s,a)', fontsize=13, fontweight='bold')
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-
-    for s in {5, 7, 11, 12, 15}:
-        ax.add_patch(plt.Rectangle((s - 0.5, -0.5), 1, 4, fill=False, edgecolor='red', linewidth=2, linestyle='--'))
-
-    plt.tight_layout()
-    path = os.path.join(FIG_DIR, '04_V_Q_heatmaps.png')
-    plt.savefig(path, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"  [OK] {path}")
-
-
-# ====================================================================
-#  7. 策略对比可视化
-# ====================================================================
-def plot_policy_comparison():
-    """对比 Random / Human / Optimal 三种策略"""
-    env = FrozenLake()
-
-    solver = PolicyIteration(env, gamma=0.9)
-    solver.policy = np.ones([solver.nS, solver.nA]) / solver.nA
-    V_opt, policy_opt, _ = solver.solve()
-    optimal_dict = solver.extract_deterministic_policy()
-
-    random_dict = {s: np.random.randint(4) for s in range(16)}
-    human_dict = {
-        0: 2, 1: 2, 2: 1, 3: 0,
-        4: 1, 5: 0, 6: 1, 7: 0,
-        8: 2, 9: 2, 10: 1, 11: 0,
-        12: 0, 13: 2, 14: 2, 15: 0
+def modify_transition_hole7_safe(original_transition):
+    modified = copy.deepcopy(original_transition)
+    modified[7] = {
+        0: [(1/3, 3, 0.0, False), (1/3, 6, 0.0, False), (1/3, 11, 0.0, False)],
+        1: [(1/3, 3, 0.0, False), (1/3, 11, 0.0, False), (1/3, 6, 0.0, False)],
+        2: [(1/3, 6, 0.0, False), (1/3, 11, 0.0, False), (1/3, 3, 0.0, False)],
+        3: [(1/3, 11, 0.0, False), (1/3, 3, 0.0, False), (1/3, 6, 0.0, False)],
     }
+    return modified
 
-    arrows = ['←', '↓', '→', '↑']
-    labels = {5: 'H', 7: 'H', 11: 'H', 12: 'H', 15: 'G'}
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+class ModifiedFrozenLake(FrozenLake):
+    def set_tran(self):
+        super().set_tran()
+        self.transition = modify_transition_hole7_safe(self.transition)
 
-    policies = [
-        ('Random Agent', random_dict, '#E74C3C'),
-        ('Human Agent (Heuristic)', human_dict, '#F39C12'),
-        ('Optimal (Policy Iteration)', optimal_dict, '#2ECC71')
+
+def plot_policy_before_after():
+    """Task 3: \u6539\u9020\u524d\u540e\u7b56\u7565\u5bf9\u6bd4"""
+    env_orig = FrozenLake()
+    env_mod = ModifiedFrozenLake()
+
+    V_orig, _, n_orig = policy_iteration(env_orig)
+    dict_orig = extract_deterministic_policy(
+        policy_improvement(env_orig.transition, V_orig, np.ones([nS, nA]) / nA)[1])
+    rate_orig = test_game(env_orig, lambda s: dict_orig[s], n_episodes=2000)
+
+    V_mod, _, n_mod = policy_iteration(env_mod)
+    dict_mod = extract_deterministic_policy(
+        policy_improvement(env_mod.transition, V_mod, np.ones([nS, nA]) / nA)[1])
+    rate_mod = test_game(env_mod, lambda s: dict_mod[s], n_episodes=2000)
+
+    print("\n" + "=" * 60)
+    print("Task 3: \u73af\u5883 transition \u6539\u9020 \u2014 \u51b0\u6d1e 7 \u53d8\u5b89\u5168")
+    print("=" * 60)
+    print(f"  \u6539\u9020\u524d: \u8fed\u4ee3 {n_orig} \u6b21, \u6210\u529f\u7387 {rate_orig:.2%}")
+    print(f"  \u6539\u9020\u540e: \u8fed\u4ee3 {n_mod} \u6b21, \u6210\u529f\u7387 {rate_mod:.2%}")
+    changed = dict_orig != dict_mod
+    yes_str = '\u662f'
+    no_str = '\u5426'
+    print(f"  \u7b56\u7565\u662f\u5426\u6539\u53d8: {yes_str if changed else no_str}")
+    print(f"  \u6210\u529f\u7387\u53d8\u5316: {rate_mod - rate_orig:+.2%}")
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    policies_data = [
+        ('Before: Original FrozenLake', dict_orig, '#2980B9'),
+        ('After: Hole 7 Safe', dict_mod, '#E74C3C'),
     ]
-
-    for ax, (name, policy, color) in zip(axes, policies):
+    for ax, (name, p_dict, color) in zip(axes, policies_data):
         ax.set_xlim(-0.5, 3.5)
         ax.set_ylim(-0.5, 3.5)
         ax.set_aspect('equal')
@@ -498,164 +302,197 @@ def plot_policy_comparison():
         ax.set_xticks(range(4))
         ax.set_yticks(range(4))
         ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
-        ax.set_title(name, fontsize=13, fontweight='bold', color=color)
-
-        for s in range(16):
+        ax.set_title(name, fontsize=11, fontweight='bold', color=color)
+        for s in range(nS):
             r, c = s // 4, s % 4
-            if s in labels:
-                ax.text(c, r, labels[s], ha='center', va='center', fontsize=24,
-                        fontweight='bold', color='#333')
+            if s in terminal_labels:
+                label = 'G' if s == 15 else 'H'
+                ax.text(c, r, label, ha='center', va='center', fontsize=22, fontweight='bold', color='#333')
             else:
-                ax.text(c, r, arrows[policy[s]], ha='center', va='center',
-                        fontsize=28, color=color)
-            ax.add_patch(plt.Rectangle((c - 0.5, r - 0.5), 1, 1, fill=False,
-                                       edgecolor='#CCCCCC', linewidth=1))
-
-        for s in {5, 7, 11, 12}:
+                ax.text(c, r, arrows[p_dict[s]], ha='center', va='center', fontsize=26, color=color)
+            ax.add_patch(plt.Rectangle((c - 0.5, r - 0.5), 1, 1, fill=False, edgecolor='#CCCCCC', linewidth=1))
+        for s in {5, 11, 12}:
             r, c = s // 4, s % 4
-            ax.add_patch(plt.Rectangle((c - 0.5, r - 0.5), 1, 1, fill=True,
-                                       color='#FFE0E0', zorder=-1))
-
-        ax.add_patch(plt.Rectangle((3.5, 3.5), 1, 1, fill=True,
-                                   color='#E0FFE0', zorder=-1))
+            ax.add_patch(plt.Rectangle((c - 0.5, r - 0.5), 1, 1, fill=True, color='#FFE0E0', zorder=-1))
+        r, c = 7 // 4, 7 % 4
+        ax.add_patch(plt.Rectangle((c - 0.5, r - 0.5), 1, 1, fill=True,
+                                    color='#E0FFE0' if 'After' in name else '#FFE0E0', zorder=-1))
+        ax.add_patch(plt.Rectangle((c - 0.5, r - 0.5), 1, 1, fill=False,
+                                    edgecolor='red', linewidth=3, linestyle='--', zorder=2))
+        ax.add_patch(plt.Rectangle((3.5, 3.5), 1, 1, fill=True, color='#E0FFE0', zorder=-1))
 
     plt.tight_layout()
-    path = os.path.join(FIG_DIR, '05_policy_comparison.png')
+    path = os.path.join(FIG_DIR, '03_policy_before_after.png')
     plt.savefig(path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"  [OK] {path}")
 
+    return dict_orig, dict_mod, rate_orig, rate_mod
+
 
 # ====================================================================
-#  8. Value Iteration vs Policy Iteration 性能对比表
+#  Task 4: Q 函数可视化与对比
 # ====================================================================
-def plot_performance_comparison_table():
-    """生成 PI vs VI 性能对比图"""
+
+def compute_q_table(env, V, gamma=0.9):
+    P = _build_model(env.transition)
+    Q = np.zeros((nS, nA))
+    for s in range(nS):
+        if s in terminal_states:
+            continue
+        for a in range(nA):
+            for prob, s_next, reward, done in P[s][a]:
+                Q[s][a] += prob * (reward + gamma * V[s_next] * (not done))
+    return Q
+
+
+def print_q_table(Q, title=""):
+    print(f"\nQ(s,a) \u8868 {title}:")
+    print(f"{'State':<8}", end="")
+    for a in range(nA):
+        print(f"{action_labels[a]:<12}", end="")
+    print()
+    print("-" * 60)
+    for s in range(nS):
+        label = f"{s}" if s not in terminal_states else (f"{s}(G)" if s == 15 else f"{s}(H)")
+        print(f"{label:<8}", end="")
+        for a in range(nA):
+            print(f"{Q[s][a]:<12.4f}", end="")
+        print()
+
+
+def plot_q_comparison():
+    """Task 4: \u5bf9\u6bd4 Human_Agent vs \u03c0* \u7684 Q \u503c\u5dee\u5f02"""
     env = FrozenLake()
 
-    gammas_list = [0.5, 0.7, 0.9, 0.99]
-    results = []
+    policy_human = np.zeros([nS, nA])
+    human_dict = {
+        0: 2, 1: 2, 2: 1, 3: 0,
+        4: 1, 5: 0, 6: 1, 7: 0,
+        8: 2, 9: 2, 10: 1, 11: 0,
+        12: 0, 13: 2, 14: 2, 15: 0,
+    }
+    for s in range(nS):
+        if s not in terminal_states:
+            policy_human[s][human_dict[s]] = 1.0
 
-    for gamma in gammas_list:
-        # Policy Iteration
-        pi = PolicyIteration(env, gamma=gamma, theta=1e-6)
-        pi.policy = np.ones([pi.nS, pi.nA]) / pi.nA
-        t0 = time.time()
-        V_pi, pol_pi, n_pi = pi.solve()
-        t_pi = time.time() - t0
-        pi_dict = pi.extract_deterministic_policy()
-        rate_pi = test_game(env, lambda s, d=pi_dict: d[s], n_episodes=2000)
+    V_opt, pi_opt, _ = policy_iteration(env)
+    opt_dict = extract_deterministic_policy(pi_opt)
+    Q_opt = compute_q_table(env, V_opt)
 
-        # Value Iteration
-        vi = ValueIteration(env, gamma=gamma, theta=1e-6)
-        t0 = time.time()
-        V_vi, n_vi = vi.solve(max_iterations=500)
-        t_vi = time.time() - t0
-        vi_dict = vi.extract_policy()
-        rate_vi = test_game(env, lambda s, d=vi_dict: d[s], n_episodes=2000)
+    V_human = np.zeros(nS)
+    V_human = policy_evaluation(env.transition, policy_human, V_human)
+    Q_human = compute_q_table(env, V_human)
 
-        results.append((gamma, n_pi, t_pi, rate_pi, n_vi, t_vi, rate_vi))
-        print(f"    γ={gamma:.2f}:  PI={n_pi}iters/{t_pi:.3f}s/{rate_pi:.2%}  "
-              f"VI={n_vi}iters/{t_vi:.3f}s/{rate_vi:.2%}")
+    print("\n" + "=" * 60)
+    print("Task 4: Q \u51fd\u6570\u53ef\u89c6\u5316\u4e0e\u5bf9\u6bd4")
+    print("=" * 60)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    print_q_table(Q_opt, "\u2014 Optimal \u03c0*")
+    print_q_table(Q_human, "\u2014 Human Agent")
 
-    g_labels = [f'γ={g:.2f}' for g in gammas_list]
+    diff = np.abs(Q_opt - Q_human)
+    diff_per_state = np.mean(diff, axis=1)
+    top_diff_states = np.argsort(diff_per_state)[::-1][:5]
+    print(f"\n\u5dee\u5f02\u6700\u5927\u7684\u72b6\u6001: {top_diff_states.tolist()}")
+    for s in top_diff_states:
+        if s not in terminal_states:
+            print(f"  State {s}: Human={human_dict[s]}({arrows[human_dict[s]]}) vs Optimal={opt_dict[s]}({arrows[opt_dict[s]]})")
+            print(f"    Q_human = {Q_human[s]}")
+            print(f"    Q_opt   = {Q_opt[s]}")
 
-    # Iterations
-    ax = axes[0]
-    x = np.arange(len(gammas_list))
-    w = 0.35
-    pi_iters = [r[1] for r in results]
-    vi_iters = [r[4] for r in results]
-    ax.bar(x - w/2, pi_iters, w, label='Policy Iteration', color='#2980B9', alpha=0.85)
-    ax.bar(x + w/2, vi_iters, w, label='Value Iteration', color='#E74C3C', alpha=0.85)
-    ax.set_xticks(x)
-    ax.set_xticklabels(g_labels, fontsize=11)
-    ax.set_ylabel('Iterations to Converge', fontsize=12)
-    ax.set_title('Convergence Speed', fontsize=13, fontweight='bold')
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.2, axis='y')
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    vmin = min(Q_opt.min(), Q_human.min())
+    vmax = max(Q_opt.max(), Q_human.max())
 
-    # Time
-    ax = axes[1]
-    pi_times = [r[2] for r in results]
-    vi_times = [r[5] for r in results]
-    ax.bar(x - w/2, [t * 1000 for t in pi_times], w, label='Policy Iteration', color='#2980B9', alpha=0.85)
-    ax.bar(x + w/2, [t * 1000 for t in vi_times], w, label='Value Iteration', color='#E74C3C', alpha=0.85)
-    ax.set_xticks(x)
-    ax.set_xticklabels(g_labels, fontsize=11)
-    ax.set_ylabel('Computation Time (ms)', fontsize=12)
-    ax.set_title('Computation Time', fontsize=13, fontweight='bold')
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.2, axis='y')
+    im = axes[0].imshow(Q_opt.T, cmap='viridis', aspect='auto', vmin=vmin, vmax=vmax)
+    axes[0].set_yticks(range(nA))
+    axes[0].set_yticklabels(action_labels, fontsize=9)
+    axes[0].set_xticks(range(nS))
+    axes[0].set_xticklabels(range(nS), fontsize=8)
+    axes[0].set_title('Q(s,a) \u2014 Optimal \u03c0*')
+    plt.colorbar(im, ax=axes[0], fraction=0.046, pad=0.04)
 
-    # Success Rate
-    ax = axes[2]
-    pi_rates = [r[3] * 100 for r in results]
-    vi_rates = [r[6] * 100 for r in results]
-    ax.bar(x - w/2, pi_rates, w, label='Policy Iteration', color='#2980B9', alpha=0.85)
-    ax.bar(x + w/2, vi_rates, w, label='Value Iteration', color='#E74C3C', alpha=0.85)
-    ax.set_xticks(x)
-    ax.set_xticklabels(g_labels, fontsize=11)
-    ax.set_ylabel('Success Rate (%)', fontsize=12)
-    ax.set_ylim(0, 100)
-    ax.set_title('Policy Quality (Success Rate)', fontsize=13, fontweight='bold')
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.2, axis='y')
+    im = axes[1].imshow(Q_human.T, cmap='viridis', aspect='auto', vmin=vmin, vmax=vmax)
+    axes[1].set_yticks(range(nA))
+    axes[1].set_yticklabels(action_labels, fontsize=9)
+    axes[1].set_xticks(range(nS))
+    axes[1].set_xticklabels(range(nS), fontsize=8)
+    axes[1].set_title('Q(s,a) \u2014 Human Agent')
+    plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
 
-    for r in pi_rates:
-        if r > 0:
-            print(f"    PI success rate: {r:.1f}%")
-    for r in vi_rates:
-        if r > 0:
-            print(f"    VI success rate: {r:.1f}%")
+    im = axes[2].imshow(diff.T, cmap='hot', aspect='auto')
+    axes[2].set_yticks(range(nA))
+    axes[2].set_yticklabels(action_labels, fontsize=9)
+    axes[2].set_xticks(range(nS))
+    axes[2].set_xticklabels(range(nS), fontsize=8)
+    axes[2].set_title('|Q_opt - Q_human| (Difference)')
+    plt.colorbar(im, ax=axes[2], fraction=0.046, pad=0.04)
+
+    for s in terminal_states:
+        for ax in axes:
+            ax.add_patch(plt.Rectangle((s - 0.5, -0.5), 1, nA, fill=False, edgecolor='red', linewidth=1.5, linestyle='--'))
 
     plt.tight_layout()
-    path = os.path.join(FIG_DIR, '06_PI_vs_VI_comparison.png')
+    path = os.path.join(FIG_DIR, '04_q_comparison.png')
     plt.savefig(path, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"  [OK] {path}")
+    print(f"\n  [OK] {path}")
+
+    return Q_opt, Q_human
 
 
 # ====================================================================
-#  9. 执行全部实验
+#  Bonus: 学生自己实现
 # ====================================================================
+
+def my_policy_iteration(env, gamma=0.9):
+    """
+    Bonus: \u5b66\u751f\u81ea\u5df1\u5b9e\u73b0\u7684 policy_iteration
+    \u53ef\u53c2\u8003\u4e0a\u9762\u7684 policy_iteration()\uff0c\u6539\u7528 for-loop / lambda \u7b49\u4e0d\u540c\u5199\u6cd5
+    """
+    raise NotImplementedError("\u8bf7\u5b9e\u73b0\u81ea\u5df1\u7684 policy_iteration()")
+
+
+# ====================================================================
+#  \u4e3b\u7a0b\u5e8f
+# ====================================================================
+
 def run_all():
-    """运行所有分析实验并生成图表"""
     print("=" * 65)
-    print("  策略迭代改造与多状态评估分析")
+    print("  \u5b9e\u9a8c 1\uff1a\u7b56\u7565\u8fed\u4ee3\u6539\u9020\u4e0e\u591a\u72b6\u6001\u8bc4\u4f30\u5206\u6790")
     print("  Policy Iteration: Improvement & Multi-State Evaluation")
     print("=" * 65)
 
-    print("\n[1/6] 收敛过程对比 (PI vs VI)...")
-    pi_iters, vi_iters = plot_convergence_comparison()
-    print(f"  Policy Iteration: {pi_iters} iterations to converge")
-    print(f"  Value Iteration:  {vi_iters} iterations to converge")
+    print("\n" + "\u2588" * 60)
+    print("  Task 1: \u7b56\u7565\u8fed\u4ee3\u6539\u9020\u4e0e\u5b9e\u73b0")
+    print("\u2588" * 60)
+    policy_dict, V_opt = plot_convergence()
 
-    print("\n[2/6] 多状态起始评估...")
-    random_ret, human_ret, opt_ret = plot_multi_state_evaluation()
+    print("\n" + "\u2588" * 60)
+    print("  Task 2: \u4e0d\u540c\u8d77\u59cb\u72b6\u6001\u8bc4\u4f30")
+    print("\u2588" * 60)
+    returns = plot_state_comparison(policy_dict)
 
-    print("\n[3/6] Gamma 敏感度分析...")
-    gammas, iters, rates = plot_gamma_sensitivity()
+    print("\n" + "\u2588" * 60)
+    print("  Task 3: \u73af\u5883 transition \u6539\u9020")
+    print("\u2588" * 60)
+    dict_before, dict_after, rate_before, rate_after = plot_policy_before_after()
 
-    print("\n[4/6] V(s) / Q(s,a) 热力图...")
-    plot_v_q_heatmaps()
-
-    print("\n[5/6] 策略对比可视化...")
-    plot_policy_comparison()
-
-    print("\n[6/6] PI vs VI 性能对比...")
-    plot_performance_comparison_table()
+    print("\n" + "\u2588" * 60)
+    print("  Task 4: Q \u51fd\u6570\u53ef\u89c6\u5316\u4e0e\u5bf9\u6bd4")
+    print("\u2588" * 60)
+    Q_opt, Q_human = plot_q_comparison()
 
     print("\n" + "=" * 65)
-    print(f"  所有图表已保存至: {FIG_DIR}/")
+    print(f"  \u6240\u6709\u56fe\u8868\u5df2\u4fdd\u5b58\u81f3: {FIG_DIR}/")
     print("=" * 65)
-    print("\n生成的文件列表:")
+    print("\n\u751f\u6210\u7684\u6587\u4ef6:")
     for f in sorted(os.listdir(FIG_DIR)):
         fpath = os.path.join(FIG_DIR, f)
-        size = os.path.getsize(fpath)
-        print(f"  {f:45s}  {size/1024:.1f} KB")
+        print(f"  {f:45s}  {os.path.getsize(fpath)/1024:.1f} KB")
+
+    return {'policy': policy_dict, 'V': V_opt, 'returns': returns}
 
 
 if __name__ == '__main__':
