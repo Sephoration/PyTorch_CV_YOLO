@@ -78,14 +78,9 @@ class VisionWorkstationGUI(QMainWindow):
         self.logo_label.setFixedSize(150, 150)
         self.logo_label.setAlignment(Qt.AlignCenter)
         self.logo_label.setStyleSheet("border: 1px solid #CCCCCC; background: #FAFAFA;")
-        logo_pixmap = QPixmap("images/GuangDong-TaiWan.png")
-        if not logo_pixmap.isNull():
-            self.logo_label.setPixmap(
-                logo_pixmap.scaled(self.logo_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-
         right_header_box = QVBoxLayout()
         right_header_box.setSpacing(8)
-        title_label = QLabel("东莞理工 - 粤台产业科技学院 - 计算机科学与技术(跨境电商)")
+        title_label = QLabel("计算机视觉研究中心")
         title_label.setFont(QFont("Microsoft YaHei", 18, QFont.Bold))
         title_label.setStyleSheet("color: #1A365D;")
         right_header_box.addWidget(title_label)
@@ -204,7 +199,7 @@ class VisionWorkstationGUI(QMainWindow):
         self.label_status_msg = QLabel("系统状态: 神经底座就绪，正在接收媒体流...")
         self.label_status_msg.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
         self.label_status_msg.setStyleSheet("color: #005577;")
-        school_label = QLabel("粤台产业科技学院 - 计算机视觉研究中心")
+        school_label = QLabel("计算机视觉研究中心")
         school_label.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
         school_label.setStyleSheet("color: #1A365D;")
         footer_layout.addWidget(self.label_status_msg)

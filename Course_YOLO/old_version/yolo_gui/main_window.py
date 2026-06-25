@@ -43,7 +43,7 @@ class YOLOMainWindow(QMainWindow):
         super().__init__()
 
         # 窗口基础设置
-        self.setWindowTitle("东莞理工 - 粤台产业科技学院 - 计算机视觉研究中心")
+        self.setWindowTitle("计算机视觉研究中心")
         self.resize(1200, 700)
 
         # 视图模式：False = 双视图；True = 只显示右侧视图

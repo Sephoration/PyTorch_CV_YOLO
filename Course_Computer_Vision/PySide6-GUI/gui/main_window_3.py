@@ -90,13 +90,6 @@ class VisionWorkstationGUI(QMainWindow):
         self.logo_label.setAlignment(Qt.AlignCenter)
         self.logo_label.setStyleSheet("border: 1px solid #CCCCCC; background: #FAFAFA;")
 
-        logo_pixmap = QPixmap("images/GuangDong-TaiWan.png")
-        if not logo_pixmap.isNull():
-            scaled_logo = logo_pixmap.scaled(self.logo_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.logo_label.setPixmap(scaled_logo)
-        else:
-            self.logo_label.setText("LOGO\n未找到")
-
         # 右侧：右侧现在由 Tabs 选项卡填满
         self.param_tabs = QTabWidget()
         self.param_tabs.setFont(QFont("Microsoft YaHei", 10))
@@ -186,7 +179,7 @@ class VisionWorkstationGUI(QMainWindow):
         # ----------------------------------------------------
         footer_layout = QHBoxLayout()
 
-        title_label = QLabel("粤台产业科技学院 - 计算机视觉研究中心")
+        title_label = QLabel("计算机视觉研究中心")
         title_label.setFont(QFont("Microsoft YaHei", 14, QFont.Bold))  # 底部标签稍微收敛字体到 14 号字
         title_label.setStyleSheet("color: #1A365D; padding-bottom: 5px;")
 

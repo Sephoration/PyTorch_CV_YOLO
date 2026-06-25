@@ -89,15 +89,8 @@ class VisionWorkstationGUI(QMainWindow):
         self.logo_label.setAlignment(Qt.AlignCenter)
         self.logo_label.setStyleSheet("border: 1px solid #CCCCCC; background: #FAFAFA;")
 
-        logo_pixmap = QPixmap("images/GuangDong-TaiWan.png")
-        if not logo_pixmap.isNull():
-            scaled_logo = logo_pixmap.scaled(self.logo_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.logo_label.setPixmap(scaled_logo)
-        else:
-            self.logo_label.setText("LOGO\n未找到")
-
         # 核心组织头衔文本
-        title_label = QLabel("东莞理工 - 粤台产业科技学院 - 计算机视觉研究中心")
+        title_label = QLabel("计算机视觉研究中心")
         title_font = QFont("Microsoft YaHei", 18, QFont.Bold)
         title_label.setFont(title_font)
         title_label.setStyleSheet("color: #1A365D;")  # 采用稳重的工业深蓝色

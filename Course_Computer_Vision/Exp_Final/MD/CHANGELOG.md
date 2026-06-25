@@ -44,7 +44,6 @@ Exp_Final/
 ### 主页面
 - 状态与操作面板：`spacing=0` + `padding/margin:0` + HTML 紧排版
 - 移除底部状态栏模型说明（悬浮窗已包含）
-- 移除顶部「粤台产业科技学院」标识
 
 ### 主页面状态与操作面板
 - 采用 HTML `<p style='line-height:1.3'>` 消除行间距
