@@ -1,0 +1,32 @@
+# YOLO手部MCP关键点检测训练配置文件
+# 400张手部图片，4个MCP关键点
+
+# 数据集的文件夹路径、修改为runs目录中的数据集
+path: ./runs/dataset
+
+# 训练集、验证集路径、修改为runs目录下的结构
+train: train/images
+val: val/images
+
+# 4个MCP关键点，每个关键点有 X, Y, 是否可见 三个参数
+kpt_shape: [4, 3]
+
+flip_idx: [0, 1, 2, 3]
+
+# 框的类别（手部检测，只有一类）
+names:
+  0: hand
+
+# 关键点名称 - 4个MCP点
+kpt_names:
+  0:  # 类别0（手部）的关键点
+    - MCP_1
+    - MCP_2
+    - MCP_3
+    - MCP_4
+
+# 可视化连线（可调整）
+skeleton:
+  - [0, 1]  # Mcp_1 - Mcp_2
+  - [1, 2]  # Mcp_2 - Mcp_3  
+  - [2, 3]  # Mcp_3 - Mcp_4
