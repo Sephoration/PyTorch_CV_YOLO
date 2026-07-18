@@ -1,6 +1,0 @@
-# basophil.yaml
-path: ../datasets_small/basophil   # 相对于“启动目录”Code 的位置
-train: images                      # 相对于 path
-val: images                        # 同上，训练验证用同一批图
-nc: 1
-names: [basophil]
